@@ -30,7 +30,7 @@ This release marks the first production-ready version of video-transcriber-mcp!
 - Switched from OpenSSL to rustls-tls for better cross-compilation support
 
 ### Features (Stable)
-- ⚡ **6-10x faster transcription** using whisper.cpp (Rust) vs Python whisper
+- ⚡ **High-performance transcription** using whisper.cpp (C++ with Rust bindings)
 - 🌐 **1000+ video platforms** supported via yt-dlp
 - 📁 **Local video files** transcription support
 - 🛠️ **4 MCP tools**:
@@ -41,14 +41,16 @@ This release marks the first production-ready version of video-transcriber-mcp!
 - 🎯 **Multiple Whisper models**: tiny, base, small, medium, large
 - 🌍 **Multi-language support**: Auto-detect or specify language
 - 📄 **Multiple output formats**: TXT, JSON, Markdown
-- 🚀 **45+ automation tasks** via Taskfile
+- 🚀 **Comprehensive Taskfile** with automation tasks
 - 📚 **Complete documentation** and examples
+- 📦 **Standalone binary** - no Python or Node.js required
 
-### Performance
-- 10-minute video transcription: ~50 seconds (vs ~5 minutes in TypeScript)
-- Memory usage: ~800MB (vs ~2GB in TypeScript)
+### Performance Characteristics
+- Native binary with instant startup (<100ms)
+- Lower memory footprint compared to Python implementations
 - Binary size: 2.3MB (optimized release build)
-- Startup time: <100ms
+- Performance depends on hardware and model choice
+- Generally faster than Python-based Whisper implementations
 
 ### Documentation
 - Complete README with installation and usage
