@@ -1,0 +1,44 @@
+[package]
+authors = ["nhatvu148"]
+categories = ["multimedia::audio", "multimedia::video"]
+description = "High-performance video transcription MCP server using whisper.cpp - 6x faster than Python"
+edition = "2024"
+keywords = ["whisper", "transcription", "mcp", "video", "audio"]
+license = "MIT"
+name = "video-transcriber-mcp"
+repository = "https://github.com/nhatvu148/video-transcriber-mcp-rs"
+version = "0.1.0"
+
+[[bin]]
+name = "video-transcriber-mcp"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+async-process = "2.3"
+chrono = "0.4"
+home = "0.5"
+reqwest = {version = "0.12", features = ["json"]}
+rmcp = {version = "0.9.1", features = ["server", "transport-io"]}
+serde = {version = "1.0", features = ["derive"]}
+serde_json = "1.0"
+tempfile = "3.13"
+thiserror = "1.0"
+tokio = {version = "1.41", features = ["full"]}
+tokio-util = "0.7"
+tracing = "0.1"
+tracing-subscriber = {version = "0.3", features = ["env-filter"]}
+walkdir = "2.5"
+whisper-rs = "0.12"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true
+
+[profile.dev]
+opt-level = 0

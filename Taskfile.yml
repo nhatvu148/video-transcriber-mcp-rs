@@ -1,0 +1,406 @@
+version: '3'
+
+vars:
+  BINARY: ./target/release/video-transcriber-mcp
+  TEST_VIDEO: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+  MODELS_DIR: "{{.HOME}}/.cache/video-transcriber-mcp/models"
+
+tasks:
+  # Build tasks
+  build:
+    desc: Build the project in release mode (optimized)
+    cmds:
+      - cargo build --release
+    sources:
+      - src/**/*.rs
+      - Cargo.toml
+    generates:
+      - target/release/video-transcriber-mcp
+
+  build:dev:
+    desc: Build the project in dev mode (fast compilation)
+    cmds:
+      - cargo build
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - cargo clean
+      - rm -rf target/
+
+  # Check and lint tasks
+  check:
+    desc: Check if the project compiles
+    cmds:
+      - cargo check
+
+  fmt:
+    desc: Format code
+    cmds:
+      - cargo fmt
+
+  lint:
+    desc: Run clippy linter
+    cmds:
+      - cargo clippy -- -D warnings
+
+  fix:
+    desc: Auto-fix linting issues
+    cmds:
+      - cargo clippy --fix --allow-dirty
+      - cargo fmt
+
+  # Model management
+  download:base:
+    desc: Download base Whisper model (recommended)
+    cmds:
+      - bash scripts/download-models.sh base
+
+  download:all:
+    desc: Download all Whisper models
+    cmds:
+      - bash scripts/download-models.sh all
+
+  download:tiny:
+    desc: Download tiny model (fastest)
+    cmds:
+      - bash scripts/download-models.sh tiny
+
+  download:small:
+    desc: Download small model (balanced)
+    cmds:
+      - bash scripts/download-models.sh small
+
+  download:medium:
+    desc: Download medium model (high accuracy)
+    cmds:
+      - bash scripts/download-models.sh medium
+
+  download:large:
+    desc: Download large model (best accuracy)
+    cmds:
+      - bash scripts/download-models.sh large
+
+  models:status:
+    desc: Check which models are downloaded
+    cmds:
+      - ls -lh {{.MODELS_DIR}}/*.bin 2>/dev/null || echo "No models found. Run 'task download:base' to download."
+
+  # Testing tasks
+  test:quick:
+    desc: Quick test with a short video (requires base model)
+    deps: [build]
+    cmds:
+      - |
+        echo "🎬 Testing with short video..."
+        {{.BINARY}} --url "{{.TEST_VIDEO}}" --model base
+    preconditions:
+      - sh: test -f {{.MODELS_DIR}}/ggml-base.bin
+        msg: "Base model not found. Run 'task download:base' first."
+
+  test:local:
+    desc: Test with a local video file
+    deps: [build]
+    cmds:
+      - |
+        if [ -z "{{.VIDEO_PATH}}" ]; then
+          echo "❌ Please provide VIDEO_PATH: task test:local VIDEO_PATH=/path/to/video.mp4"
+          exit 1
+        fi
+        {{.BINARY}} --url "{{.VIDEO_PATH}}" --model base
+    vars:
+      VIDEO_PATH: '{{.VIDEO_PATH | default ""}}'
+
+  test:url:
+    desc: Test with a custom URL
+    deps: [build]
+    cmds:
+      - |
+        if [ -z "{{.VIDEO_URL}}" ]; then
+          echo "❌ Please provide VIDEO_URL: task test:url VIDEO_URL=https://..."
+          exit 1
+        fi
+        {{.BINARY}} --url "{{.VIDEO_URL}}" --model base
+    vars:
+      VIDEO_URL: '{{.VIDEO_URL | default ""}}'
+
+  test:all-models:
+    desc: Test transcription with all available models
+    deps: [build]
+    cmds:
+      - |
+        echo "🎯 Testing all available models..."
+        for model in tiny base small medium large; do
+          if [ -f "{{.MODELS_DIR}}/ggml-${model}.bin" ]; then
+            echo "Testing with ${model} model..."
+            time {{.BINARY}} --url "{{.TEST_VIDEO}}" --model ${model}
+            echo "---"
+          fi
+        done
+
+  # Benchmark tasks
+  benchmark:
+    desc: Run benchmark with timing
+    deps: [build]
+    cmds:
+      - |
+        echo "⏱️  Running benchmark..."
+        time {{.BINARY}} --url "{{.TEST_VIDEO}}" --model base
+
+  benchmark:compare:
+    desc: Compare performance across models
+    deps: [build]
+    cmds:
+      - |
+        echo "📊 Benchmarking different models..."
+        echo "Video: {{.TEST_VIDEO}}"
+        echo ""
+
+        for model in tiny base small; do
+          if [ -f "{{.MODELS_DIR}}/ggml-${model}.bin" ]; then
+            echo "=== Model: ${model} ==="
+            time {{.BINARY}} --url "{{.TEST_VIDEO}}" --model ${model}
+            echo ""
+          fi
+        done
+
+  benchmark:vs-typescript:
+    desc: Compare with TypeScript version
+    cmds:
+      - |
+        echo "🏁 Rust vs TypeScript Benchmark"
+        echo "================================"
+        echo ""
+
+        # Rust version
+        echo "🦀 Rust Version (video-transcriber-mcp):"
+        cd {{.ROOT_DIR}}
+        time {{.BINARY}} --url "{{.TEST_VIDEO}}" --model base
+
+        echo ""
+        echo "---"
+        echo ""
+
+        # TypeScript version
+        echo "📘 TypeScript Version (video-transcriber-mcp):"
+        cd ../video-transcriber
+        time npm run start -- "{{.TEST_VIDEO}}"
+
+  # Dependencies check
+  deps:check:
+    desc: Check if all required dependencies are installed
+    cmds:
+      - |
+        echo "🔍 Checking dependencies..."
+        echo ""
+
+        # Check Rust
+        if command -v rustc &> /dev/null; then
+          echo "✅ Rust: $(rustc --version)"
+        else
+          echo "❌ Rust: NOT INSTALLED"
+        fi
+
+        # Check yt-dlp
+        if command -v yt-dlp &> /dev/null; then
+          echo "✅ yt-dlp: $(yt-dlp --version)"
+        else
+          echo "❌ yt-dlp: NOT INSTALLED (run: brew install yt-dlp)"
+        fi
+
+        # Check ffmpeg
+        if command -v ffmpeg &> /dev/null; then
+          echo "✅ ffmpeg: $(ffmpeg -version | head -1)"
+        else
+          echo "❌ ffmpeg: NOT INSTALLED (run: brew install ffmpeg)"
+        fi
+
+        echo ""
+        echo "📦 Whisper Models:"
+        ls -lh {{.MODELS_DIR}}/*.bin 2>/dev/null || echo "  ⚠️  No models found (run: task download:base)"
+
+  deps:install:
+    desc: Install all required dependencies (macOS)
+    cmds:
+      - |
+        echo "📥 Installing dependencies..."
+
+        if ! command -v yt-dlp &> /dev/null; then
+          echo "Installing yt-dlp..."
+          brew install yt-dlp
+        fi
+
+        if ! command -v ffmpeg &> /dev/null; then
+          echo "Installing ffmpeg..."
+          brew install ffmpeg
+        fi
+
+        echo "✅ All dependencies installed!"
+        task deps:check
+
+  # Development tasks
+  dev:
+    desc: Run in development mode (for testing changes)
+    cmds:
+      - cargo run -- --url "{{.TEST_VIDEO}}" --model base
+
+  watch:
+    desc: Watch for changes and rebuild
+    cmds:
+      - cargo watch -x check -x test
+
+  run:
+    desc: Run the binary directly
+    deps: [build]
+    cmds:
+      - |
+        if [ -z "{{.ARGS}}" ]; then
+          echo "Usage: task run ARGS='--url VIDEO_URL --model base'"
+          exit 1
+        fi
+        {{.BINARY}} {{.ARGS}}
+    vars:
+      ARGS: '{{.ARGS | default ""}}'
+
+  # Setup tasks
+  setup:
+    desc: Complete project setup (build + download base model)
+    cmds:
+      - task: build
+      - task: download:base
+      - task: deps:check
+      - |
+        echo ""
+        echo "🎉 Setup complete! Try: task test:quick"
+
+  setup:full:
+    desc: Complete setup with all models
+    cmds:
+      - task: build
+      - task: download:all
+      - task: deps:check
+
+  # Utility tasks
+  clean:models:
+    desc: Delete all downloaded models
+    cmds:
+      - rm -rf {{.MODELS_DIR}}/*.bin
+      - echo "🗑️  All models deleted"
+
+  clean:outputs:
+    desc: Delete all transcription outputs
+    cmds:
+      - rm -rf ~/Downloads/video-transcripts/*
+      - echo "🗑️  All transcripts deleted"
+
+  size:
+    desc: Show binary size
+    deps: [build]
+    cmds:
+      - |
+        echo "📦 Binary Size:"
+        ls -lh {{.BINARY}}
+        echo ""
+        echo "📊 Stripped size: $(du -h {{.BINARY}} | cut -f1)"
+
+  info:
+    desc: Show project information
+    cmds:
+      - |
+        echo "🚀 Video Transcriber RS"
+        echo "======================"
+        echo ""
+        echo "📂 Project: {{.ROOT_DIR}}"
+        echo "🔨 Binary: {{.BINARY}}"
+        echo "📦 Models: {{.MODELS_DIR}}"
+        echo "📝 Outputs: ~/Downloads/video-transcripts/"
+        echo ""
+        task size
+        echo ""
+        task deps:check
+
+  # Release tasks
+  release:build:
+    desc: Build optimized release binary
+    cmds:
+      - cargo build --release --locked
+      - strip {{.BINARY}} 2>/dev/null || true
+      - |
+        echo "✅ Release build complete!"
+        task size
+
+  release:check:
+    desc: Pre-release checks (fmt, lint, test, build)
+    cmds:
+      - task: fmt
+      - task: lint
+      - task: build
+      - echo "✅ All checks passed! Ready for release."
+
+  # Help and documentation
+  help:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  readme:
+    desc: Open README in default viewer
+    cmds:
+      - |
+        if command -v glow &> /dev/null; then
+          glow README.md
+        else
+          cat README.md
+        fi
+
+  # MCP Server tasks
+  mcp:test:
+    desc: Test MCP server with stdio
+    deps: [build]
+    cmds:
+      - |
+        echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | {{.BINARY}}
+
+  mcp:setup:
+    desc: Show MCP setup instructions
+    cmds:
+      - |
+        echo "📝 Add this to ~/.claude/settings.json:"
+        echo ""
+        echo '{'
+        echo '  "mcpServers": {'
+        echo '    "video-transcriber-mcp": {'
+        echo '      "command": "{{.BINARY}}"'
+        echo '    }'
+        echo '  }'
+        echo '}'
+        echo ""
+        echo "Then restart Claude Code!"
+
+  # Quick shortcuts
+  q:
+    desc: Quick test (alias for test:quick)
+    cmds:
+      - task: test:quick
+
+  b:
+    desc: Quick build (alias for build)
+    cmds:
+      - task: build
+
+  d:
+    desc: Download base model (alias for download:base)
+    cmds:
+      - task: download:base
+
+# Default task
+default:
+  desc: Show help
+  cmds:
+    - task: info
+    - echo ""
+    - echo "💡 Quick Commands:"
+    - echo "  task setup       - Complete project setup"
+    - echo "  task test:quick  - Test with short video"
+    - echo "  task benchmark   - Run performance benchmark"
+    - echo "  task help        - Show all available tasks"
