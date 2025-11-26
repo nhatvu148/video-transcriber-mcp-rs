@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/nhatvu148/video-transcriber-mcp/releases)
+[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/nhatvu148/video-transcriber-mcp-rs/releases)
 
 A Model Context Protocol (MCP) server that transcribes videos from **1000+ platforms** using whisper.cpp. Built with Rust for maximum performance and efficiency.
 
@@ -20,13 +20,13 @@ curl -fsSL https://raw.githubusercontent.com/nhatvu148/video-transcriber-mcp/mai
 #### Option 1: Download Pre-built Binary
 ```bash
 # macOS (Intel)
-curl -L https://github.com/nhatvu148/video-transcriber-mcp/releases/download/v0.1.0/video-transcriber-mcp-x86_64-apple-darwin.tar.gz | tar xz
+curl -L https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/download/v0.1.0/video-transcriber-mcp-x86_64-apple-darwin.tar.gz | tar xz
 
 # macOS (Apple Silicon)
-curl -L https://github.com/nhatvu148/video-transcriber-mcp/releases/download/v0.1.0/video-transcriber-mcp-aarch64-apple-darwin.tar.gz | tar xz
+curl -L https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/download/v0.1.0/video-transcriber-mcp-aarch64-apple-darwin.tar.gz | tar xz
 
 # Linux (x86_64)
-curl -L https://github.com/nhatvu148/video-transcriber-mcp/releases/download/v0.1.0/video-transcriber-mcp-x86_64-unknown-linux-gnu.tar.gz | tar xz
+curl -L https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/download/v0.1.0/video-transcriber-mcp-x86_64-unknown-linux-gnu.tar.gz | tar xz
 
 # Move to PATH
 mv video-transcriber-mcp ~/.local/bin/
