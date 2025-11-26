@@ -69,9 +69,11 @@ pub struct OutputFiles {
 
 #[derive(Debug, Clone)]
 pub struct TranscriptionResult {
+    #[allow(dead_code)]
     pub success: bool,
     pub files: OutputFiles,
     pub metadata: VideoMetadata,
+    #[allow(dead_code)]
     pub transcript: String,
     pub transcript_preview: String,
     pub word_count: usize,

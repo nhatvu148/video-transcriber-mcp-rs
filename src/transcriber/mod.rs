@@ -6,5 +6,5 @@ pub mod audio;
 
 pub use engine::TranscriberEngine;
 pub use types::{
-    TranscriptionOptions, TranscriptionResult, VideoMetadata, WhisperModel, OutputFiles,
+    TranscriptionOptions, WhisperModel,
 };

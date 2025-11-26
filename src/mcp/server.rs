@@ -79,7 +79,7 @@ impl McpServer {
                 "resources": {}
             },
             "serverInfo": {
-                "name": "video-transcriber-rs",
+                "name": "video-transcriber-mcp",
                 "version": "0.1.0"
             }
         });

@@ -8,6 +8,6 @@ pub fn get_default_output_dir() -> PathBuf {
 pub fn get_models_dir() -> PathBuf {
     let home = home::home_dir().expect("Could not find home directory");
     home.join(".cache")
-        .join("video-transcriber-rs")
+        .join("video-transcriber-mcp")
         .join("models")
 }
