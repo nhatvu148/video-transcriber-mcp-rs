@@ -1,6 +1,6 @@
 # Video Transcriber MCP 🚀
 
-**High-performance video transcription MCP server using whisper.cpp - 6x faster than Python!**
+**High-performance video transcription MCP server using whisper.cpp (Rust)**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
@@ -47,16 +47,21 @@ cargo build --release
 
 ## 🎯 Why Rust?
 
-| Metric | Python whisper | faster-whisper | **whisper.cpp (Rust)** |
-|--------|----------------|----------------|------------------------|
-| **10-min video** | ~5 minutes | ~2 minutes | **~50 seconds** ⚡ |
-| **Memory usage** | ~2 GB | ~1.2 GB | **~800 MB** 💾 |
-| **Startup time** | ~3s | ~2s | **<100ms** 🏃 |
-| **Speedup** | 1x | 2.5x | **6x** 🚀 |
+This version uses **whisper.cpp** (C++ implementation with Rust bindings) instead of Python's OpenAI Whisper:
+
+| Advantage | whisper.cpp (Rust) | OpenAI Whisper (Python) |
+|-----------|-------------------|------------------------|
+| **Performance** | Native C++ speed | Python interpreter overhead |
+| **Memory** | Lower footprint | Higher memory usage |
+| **Startup** | Instant (<100ms) | Slow (~2-3s model loading) |
+| **Dependencies** | Standalone binary | Requires Python + packages |
+| **Portability** | Single binary | Python environment needed |
+
+Real-world performance depends on your hardware, video length, and chosen model.
 
 ## ✨ Features
 
-- 🚀 **6-10x faster** than Python whisper (thanks to whisper.cpp)
+- 🚀 **High performance** transcription using whisper.cpp (C++ with Rust bindings)
 - 🎥 Download from **1000+ platforms** (YouTube, Vimeo, TikTok, Twitter, etc.)
 - 📂 Transcribe **local video files** (mp4, avi, mov, mkv, etc.)
 - 🎤 **100% offline** transcription (privacy-first)
@@ -64,8 +69,8 @@ cargo build --release
 - 🌐 **90+ languages** supported
 - 📝 **Multiple output formats** (TXT, JSON, Markdown)
 - 🔌 **MCP integration** for Claude Code
-- ⚡ **Native performance** with Rust
-- 💾 **Low memory footprint**
+- ⚡ **Native binary** - no Python or Node.js required
+- 💾 **Low memory footprint** compared to Python implementations
 
 ## ⚡ Quick Start (Using Taskfile)
 
@@ -201,35 +206,32 @@ Then use in Claude Code:
 Please transcribe this YouTube video: https://www.youtube.com/watch?v=VIDEO_ID
 ```
 
-## 📊 Performance Benchmarks
+## 📊 Performance
 
-Tested on MacBook Pro M1 (8-core, 16GB RAM):
+### Expected Performance Characteristics
 
-### 5-Minute Video
+Based on whisper.cpp vs OpenAI Whisper benchmarks from the community:
 
-| Implementation | Time | Memory | Model |
-|----------------|------|--------|-------|
-| Python whisper | 2m 15s | 1.8 GB | base |
-| faster-whisper | 52s | 1.1 GB | base |
-| **video-transcriber-mcp** | **18s** | **650 MB** | base |
+**Transcription Speed** (approximate, varies by hardware):
+- whisper.cpp is typically **2-6x faster** than Python Whisper
+- Faster startup time (no Python interpreter overhead)
+- Lower memory footprint (no Python runtime)
 
-### 10-Minute Video
+**Real-world factors that affect performance:**
+- CPU: More cores = faster processing
+- Model size: Tiny is fastest, Large is slowest but most accurate
+- Video length: Longer videos take proportionally more time
+- Audio complexity: Clear speech transcribes faster than noisy audio
 
-| Implementation | Time | Memory | Model |
-|----------------|------|--------|-------|
-| Python whisper | 4m 50s | 2.1 GB | base |
-| faster-whisper | 1m 58s | 1.3 GB | base |
-| **video-transcriber-mcp** | **48s** | **820 MB** | base |
+### Want to help?
 
-### 30-Minute Video
+We're collecting real benchmark data! If you run both versions, please share your results:
+- Hardware specs (CPU, RAM)
+- Video length tested
+- Model used
+- Time taken for each version
 
-| Implementation | Time | Memory | Model |
-|----------------|------|--------|-------|
-| Python whisper | 14m 30s | 2.5 GB | base |
-| faster-whisper | 5m 45s | 1.6 GB | base |
-| **video-transcriber-mcp** | **2m 24s** | **980 MB** | base |
-
-**Speedup: 6-10x faster than Python, 2.4x faster than faster-whisper!**
+Open an issue with your benchmark results to help improve this section!
 
 ## 🎛️ Model Comparison
 
