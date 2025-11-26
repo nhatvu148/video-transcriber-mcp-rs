@@ -4,69 +4,93 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:  # Allows manual trigger from GitHub UI
+  workflow_dispatch:
 
 jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - os: macos-latest
+          # macOS Intel
+          - os: macos-13
             target: x86_64-apple-darwin
             binary: video-transcriber-mcp
-          - os: macos-latest
+            use_cross: false
+
+          # macOS Apple Silicon
+          - os: macos-14
             target: aarch64-apple-darwin
             binary: video-transcriber-mcp
+            use_cross: false
+
+          # Linux x86_64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary: video-transcriber-mcp
+            use_cross: false
+
+          # Linux ARM64 (cross-compile)
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             binary: video-transcriber-mcp
+            use_cross: true
+
+          # Windows
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             binary: video-transcriber-mcp.exe
+            use_cross: false
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          target: ${{ matrix.target }}
-          override: true
+          targets: ${{ matrix.target }}
 
-      - name: Build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --release --target ${{ matrix.target }}
+      - name: Install cross-compilation tools
+        if: matrix.use_cross
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross
 
-      - name: Package binary
-        shell: bash
+      - name: Build (native)
+        if: ${{ !matrix.use_cross }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: matrix.use_cross
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Package binary (Unix)
+        if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            7z a ../../../${{ matrix.binary }}-${{ matrix.target }}.zip ${{ matrix.binary }}
-          else
-            tar czf ../../../${{ matrix.binary }}-${{ matrix.target }}.tar.gz ${{ matrix.binary }}
-          fi
+          tar czf ../../../${{ matrix.binary }}-${{ matrix.target }}.tar.gz ${{ matrix.binary }}
+
+      - name: Package binary (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ../../../${{ matrix.binary }}-${{ matrix.target }}.zip ${{ matrix.binary }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.binary }}-${{ matrix.target }}
+          name: ${{ matrix.target }}
           path: |
             *.tar.gz
             *.zip
+          retention-days: 1
 
   release:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/checkout@v4
 
@@ -75,10 +99,14 @@ jobs:
         with:
           path: artifacts
 
+      - name: List artifacts
+        run: |
+          find artifacts -type f
+
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          files: artifacts/**/*.{tar.gz,zip}
           body_path: CHANGELOG.md
           draft: false
           prerelease: false
