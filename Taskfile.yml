@@ -337,6 +337,57 @@ tasks:
       - task: build
       - echo "✅ All checks passed! Ready for release."
 
+  "release:tag":
+    desc: "Create and push a release tag - usage: task release:tag VERSION=0.1.0"
+    cmds:
+      - |
+        if [ -z "{{.VERSION}}" ]; then
+          echo "❌ Please provide VERSION: task release:tag VERSION=0.1.0"
+          exit 1
+        fi
+        echo "🏷️  Creating release tag v{{.VERSION}}..."
+        git tag -a v{{.VERSION}} -m "Release v{{.VERSION}}"
+        git push origin v{{.VERSION}}
+        echo "✅ Tag v{{.VERSION}} pushed! Check GitHub Actions for build progress."
+    vars:
+      VERSION: '{{.VERSION | default ""}}'
+
+  release:
+    desc: "Full release workflow - usage: task release VERSION=0.1.0"
+    cmds:
+      - |
+        if [ -z "{{.VERSION}}" ]; then
+          echo "❌ Please provide VERSION: task release VERSION=0.1.0"
+          exit 1
+        fi
+        echo "🚀 Starting release v{{.VERSION}}..."
+      - task: release:check
+      - |
+        echo ""
+        echo "📝 Please update version in Cargo.toml and CHANGELOG.md if needed"
+        echo "Press Enter to continue or Ctrl+C to abort..."
+        read
+      - task: "release:tag"
+        vars:
+          VERSION: '{{.VERSION}}'
+    vars:
+      VERSION: '{{.VERSION | default ""}}'
+
+  release:delete:
+    desc: "Delete a release tag - usage: task release:delete VERSION=0.1.0"
+    cmds:
+      - |
+        if [ -z "{{.VERSION}}" ]; then
+          echo "❌ Please provide VERSION: task release:delete VERSION=0.1.0"
+          exit 1
+        fi
+        echo "⚠️  Deleting tag v{{.VERSION}}..."
+        git tag -d v{{.VERSION}}
+        git push origin :refs/tags/v{{.VERSION}}
+        echo "✅ Tag v{{.VERSION}} deleted"
+    vars:
+      VERSION: '{{.VERSION | default ""}}'
+
   # Help and documentation
   help:
     desc: Show available tasks
@@ -376,31 +427,3 @@ tasks:
         echo '}'
         echo ""
         echo "Then restart Claude Code!"
-
-  # Quick shortcuts
-  q:
-    desc: Quick test (alias for test:quick)
-    cmds:
-      - task: test:quick
-
-  b:
-    desc: Quick build (alias for build)
-    cmds:
-      - task: build
-
-  d:
-    desc: Download base model (alias for download:base)
-    cmds:
-      - task: download:base
-
-# Default task
-default:
-  desc: Show help
-  cmds:
-    - task: info
-    - echo ""
-    - echo "💡 Quick Commands:"
-    - echo "  task setup       - Complete project setup"
-    - echo "  task test:quick  - Test with short video"
-    - echo "  task benchmark   - Run performance benchmark"
-    - echo "  task help        - Show all available tasks"
