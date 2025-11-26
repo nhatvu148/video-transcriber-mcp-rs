@@ -337,7 +337,7 @@ tasks:
       - task: build
       - echo "✅ All checks passed! Ready for release."
 
-  "release:tag":
+  release:tag:
     desc: "Create and push a release tag - usage: task release:tag VERSION=0.1.0"
     cmds:
       - |
