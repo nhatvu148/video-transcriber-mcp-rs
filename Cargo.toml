@@ -1,7 +1,7 @@
 [package]
 authors = ["nhatvu148"]
 categories = ["multimedia::audio", "multimedia::video"]
-description = "High-performance video transcription MCP server using whisper.cpp - 6x faster than Python"
+description = "High-performance video transcription MCP server using whisper.cpp for faster transcription"
 edition = "2024"
 keywords = ["whisper", "transcription", "mcp", "video", "audio"]
 license = "MIT"
