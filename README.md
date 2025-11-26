@@ -164,37 +164,35 @@ Models are stored in `~/.cache/video-transcriber-mcp/models/`
 
 ## 🚀 Quick Start
 
-### Standalone Usage
-
-```bash
-# Transcribe a YouTube video
-./target/release/video-transcriber-mcp \
-  --url "https://www.youtube.com/watch?v=VIDEO_ID" \
-  --model base
-
-# Transcribe a local video file
-./target/release/video-transcriber-mcp \
-  --url /path/to/video.mp4 \
-  --model small \
-  --language en
-
-# High-accuracy transcription
-./target/release/video-transcriber-mcp \
-  --url "https://vimeo.com/123456789" \
-  --model large \
-  --output-dir ./transcripts
-```
-
 ### MCP Server (for Claude Code)
 
 Add to `~/.claude/settings.json`:
 
+**Option 1: If installed via GitHub Release or cargo install:**
 ```json
 {
   "mcpServers": {
     "video-transcriber-mcp": {
-      "command": "/path/to/video-transcriber-mcp/target/release/video-transcriber-mcp",
-      "args": []
+      "command": "video-transcriber-mcp",
+      "args": [],
+      "env": {
+        "RUST_LOG": "info"
+      }
+    }
+  }
+}
+```
+
+**Option 2: If built from source:**
+```json
+{
+  "mcpServers": {
+    "video-transcriber-mcp": {
+      "command": "/absolute/path/to/video-transcriber-mcp-rs/target/release/video-transcriber-mcp",
+      "args": [],
+      "env": {
+        "RUST_LOG": "info"
+      }
     }
   }
 }
@@ -202,8 +200,26 @@ Add to `~/.claude/settings.json`:
 
 Then use in Claude Code:
 
+**Basic transcription (uses base model by default):**
 ```
 Please transcribe this YouTube video: https://www.youtube.com/watch?v=VIDEO_ID
+```
+
+**Transcribe with specific model:**
+```
+Transcribe this video using the large model for best accuracy:
+https://www.youtube.com/watch?v=VIDEO_ID
+```
+
+**Transcribe local video file:**
+```
+Transcribe this local video file: /Users/myname/Videos/meeting.mp4
+```
+
+**Transcribe in specific language:**
+```
+Transcribe this Spanish video: https://www.youtube.com/watch?v=VIDEO_ID
+(language: es, model: medium)
 ```
 
 ## 📊 Performance
@@ -285,20 +301,6 @@ The key to building fast software is understanding...
 ```
 
 ## 🔧 Configuration
-
-### Command-Line Options
-
-```bash
-video-transcriber-mcp [OPTIONS]
-
-OPTIONS:
-    --url <URL>              Video URL or local file path (required)
-    --output-dir <DIR>       Output directory (default: ~/Downloads/video-transcripts)
-    --model <MODEL>          Whisper model: tiny|base|small|medium|large (default: base)
-    --language <LANG>        Language code (ISO 639-1) or 'auto' (default: auto)
-    -h, --help              Print help
-    -V, --version           Print version
-```
 
 ### Environment Variables
 
