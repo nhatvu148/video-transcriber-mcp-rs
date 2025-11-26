@@ -102,14 +102,16 @@ jobs:
         with:
           path: artifacts
 
-      - name: List artifacts
+      - name: Prepare release assets
         run: |
-          find artifacts -type f
+          mkdir -p release-assets
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} release-assets/ \;
+          ls -lh release-assets/
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*.{tar.gz,zip}
+          files: release-assets/*
           body_path: CHANGELOG.md
           draft: false
           prerelease: false
