@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build ${{ matrix.target }}
@@ -15,13 +18,13 @@ jobs:
       matrix:
         include:
           # macOS Intel
-          - os: macos-13
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             binary: video-transcriber-mcp
             use_cross: false
 
           # macOS Apple Silicon
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             binary: video-transcriber-mcp
             use_cross: false
