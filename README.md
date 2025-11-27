@@ -10,40 +10,47 @@ A Model Context Protocol (MCP) server that transcribes videos from **1000+ platf
 
 ## 📦 Installation
 
-### One-Line Install (Recommended)
+### Homebrew (macOS/Linux) - Recommended
+
+The easiest way to install with all dependencies:
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nhatvu148/video-transcriber-mcp/main/install.sh | bash
+brew install nhatvu148/tap/video-transcriber-mcp
 ```
 
-### Manual Installation
+This automatically installs the binary along with required dependencies (cmake, yt-dlp, ffmpeg).
 
-#### Option 1: Download Pre-built Binary
-```bash
-# macOS (Intel)
-curl -L https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/download/v0.1.0/video-transcriber-mcp-x86_64-apple-darwin.tar.gz | tar xz
+### Cargo Install
 
-# macOS (Apple Silicon)
-curl -L https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/download/v0.1.0/video-transcriber-mcp-aarch64-apple-darwin.tar.gz | tar xz
+If you have Rust installed:
 
-# Linux (x86_64)
-curl -L https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/download/v0.1.0/video-transcriber-mcp-x86_64-unknown-linux-gnu.tar.gz | tar xz
-
-# Move to PATH
-mv video-transcriber-mcp ~/.local/bin/
-```
-
-#### Option 2: Install from Source
 ```bash
 cargo install video-transcriber-mcp
 ```
 
-#### Option 3: Build Locally
+**Note:** You'll need to manually install dependencies: `yt-dlp`, `ffmpeg`, `cmake`
+
+### Pre-built Binaries
+
+Download from [GitHub Releases](https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/latest):
+
 ```bash
-git clone https://github.com/nhatvu148/video-transcriber-mcp.git
-cd video-transcriber-mcp
-cargo build --release
-# Binary at: target/release/video-transcriber-mcp
+# macOS (Intel)
+curl -L https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/latest/download/video-transcriber-mcp-x86_64-apple-darwin.tar.gz | tar xz
+sudo mv video-transcriber-mcp /usr/local/bin/
+
+# macOS (Apple Silicon)
+curl -L https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/latest/download/video-transcriber-mcp-aarch64-apple-darwin.tar.gz | tar xz
+sudo mv video-transcriber-mcp /usr/local/bin/
+
+# Linux (x86_64)
+curl -L https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/latest/download/video-transcriber-mcp-x86_64-unknown-linux-gnu.tar.gz | tar xz
+sudo mv video-transcriber-mcp /usr/local/bin/
+
+# Windows: Download .zip from releases page
 ```
+
+**Note:** You'll need to manually install dependencies: `yt-dlp`, `ffmpeg`
 
 ## 🎯 Why Rust?
 
@@ -100,67 +107,6 @@ task help            # Show all commands
 ```
 
 See [Taskfile.yml](Taskfile.yml) for all available tasks.
-
----
-
-## 📦 Installation
-
-### Homebrew (macOS/Linux)
-
-The easiest way to install with all dependencies:
-
-```bash
-brew install nhatvu148/tap/video-transcriber-mcp
-```
-
-This automatically installs the binary along with required dependencies (yt-dlp, ffmpeg).
-
-You can also tap first, then install:
-```bash
-brew tap nhatvu148/tap
-brew install video-transcriber-mcp
-```
-
-### Cargo Install (All Platforms)
-
-If you have Rust installed:
-
-```bash
-cargo install video-transcriber-mcp
-```
-
-**Note:** You'll need to manually install dependencies:
-- yt-dlp: `brew install yt-dlp` (macOS) or `pip install yt-dlp`
-- ffmpeg: `brew install ffmpeg` (macOS) or see platform instructions below
-
-### GitHub Release (Pre-built Binaries)
-
-Download pre-built binaries from [Releases](https://github.com/nhatvu148/video-transcriber-mcp-rs/releases):
-
-**macOS:**
-```bash
-# Intel
-curl -L https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/latest/download/video-transcriber-mcp-x86_64-apple-darwin.tar.gz | tar xz
-sudo mv video-transcriber-mcp /usr/local/bin/
-
-# Apple Silicon
-curl -L https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/latest/download/video-transcriber-mcp-aarch64-apple-darwin.tar.gz | tar xz
-sudo mv video-transcriber-mcp /usr/local/bin/
-```
-
-**Linux:**
-```bash
-# x86_64
-curl -L https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/latest/download/video-transcriber-mcp-x86_64-unknown-linux-gnu.tar.gz | tar xz
-sudo mv video-transcriber-mcp /usr/local/bin/
-
-# ARM64
-curl -L https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/latest/download/video-transcriber-mcp-aarch64-unknown-linux-gnu.tar.gz | tar xz
-sudo mv video-transcriber-mcp /usr/local/bin/
-```
-
-**Windows:**
-Download `video-transcriber-mcp-x86_64-pc-windows-msvc.zip` from [Releases](https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/latest) and extract to a directory in your PATH.
 
 ---
 
