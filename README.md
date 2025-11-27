@@ -3,7 +3,7 @@
 **High-performance video transcription MCP server using whisper.cpp (Rust)**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/nhatvu148/video-transcriber-mcp-rs/releases)
 
 A Model Context Protocol (MCP) server that transcribes videos from **1000+ platforms** using whisper.cpp. Built with Rust for maximum performance and efficiency.
@@ -114,7 +114,7 @@ See [Taskfile.yml](Taskfile.yml) for all available tasks.
 
 ### Prerequisites
 
-1. **Rust** (1.70+)
+1. **Rust** (1.85+ for Rust 2024 edition)
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
