@@ -103,7 +103,68 @@ See [Taskfile.yml](Taskfile.yml) for all available tasks.
 
 ---
 
-## 📦 Manual Installation
+## 📦 Installation
+
+### Homebrew (macOS/Linux)
+
+The easiest way to install with all dependencies:
+
+```bash
+brew install nhatvu148/tap/video-transcriber-mcp
+```
+
+This automatically installs the binary along with required dependencies (yt-dlp, ffmpeg).
+
+You can also tap first, then install:
+```bash
+brew tap nhatvu148/tap
+brew install video-transcriber-mcp
+```
+
+### Cargo Install (All Platforms)
+
+If you have Rust installed:
+
+```bash
+cargo install video-transcriber-mcp
+```
+
+**Note:** You'll need to manually install dependencies:
+- yt-dlp: `brew install yt-dlp` (macOS) or `pip install yt-dlp`
+- ffmpeg: `brew install ffmpeg` (macOS) or see platform instructions below
+
+### GitHub Release (Pre-built Binaries)
+
+Download pre-built binaries from [Releases](https://github.com/nhatvu148/video-transcriber-mcp-rs/releases):
+
+**macOS:**
+```bash
+# Intel
+curl -L https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/latest/download/video-transcriber-mcp-x86_64-apple-darwin.tar.gz | tar xz
+sudo mv video-transcriber-mcp /usr/local/bin/
+
+# Apple Silicon
+curl -L https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/latest/download/video-transcriber-mcp-aarch64-apple-darwin.tar.gz | tar xz
+sudo mv video-transcriber-mcp /usr/local/bin/
+```
+
+**Linux:**
+```bash
+# x86_64
+curl -L https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/latest/download/video-transcriber-mcp-x86_64-unknown-linux-gnu.tar.gz | tar xz
+sudo mv video-transcriber-mcp /usr/local/bin/
+
+# ARM64
+curl -L https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/latest/download/video-transcriber-mcp-aarch64-unknown-linux-gnu.tar.gz | tar xz
+sudo mv video-transcriber-mcp /usr/local/bin/
+```
+
+**Windows:**
+Download `video-transcriber-mcp-x86_64-pc-windows-msvc.zip` from [Releases](https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/latest) and extract to a directory in your PATH.
+
+---
+
+## 📦 Manual Build from Source
 
 ### Prerequisites
 
