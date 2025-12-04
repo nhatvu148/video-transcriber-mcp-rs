@@ -28,7 +28,6 @@ jobs:
             target: aarch64-apple-darwin
             binary: video-transcriber-mcp
             use_cross: false
-            extra_flags: "-mcpu=apple-m1"
 
           # Linux x86_64
           - os: ubuntu-latest
@@ -64,8 +63,7 @@ jobs:
       - name: Build (native)
         if: ${{ !matrix.use_cross }}
         env:
-          CFLAGS: ${{ matrix.extra_flags || '' }}
-          CXXFLAGS: ${{ matrix.extra_flags || '' }}
+          WHISPER_NATIVE: ${{ matrix.target == 'aarch64-apple-darwin' && 'OFF' || '' }}
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Build (cross)
