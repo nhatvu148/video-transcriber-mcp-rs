@@ -1,9 +1,16 @@
 #!/bin/bash
 set -e
 
-VERSION="0.1.0"
 REPO="nhatvu148/video-transcriber-mcp-rs"
 BINARY_NAME="video-transcriber-mcp"
+
+# Fetch latest version from GitHub API (removes 'v' prefix)
+VERSION=$(curl -s "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')
+
+if [ -z "$VERSION" ]; then
+    echo "❌ Failed to fetch latest version from GitHub"
+    exit 1
+fi
 
 echo "🚀 Installing video-transcriber-mcp v${VERSION}"
 echo ""
