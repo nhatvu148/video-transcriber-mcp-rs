@@ -63,7 +63,8 @@ jobs:
       - name: Build (native)
         if: ${{ !matrix.use_cross }}
         env:
-          WHISPER_NATIVE: ${{ matrix.target == 'aarch64-apple-darwin' && 'OFF' || '' }}
+          CMAKE_C_FLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mcpu=apple-m1+noi8mm' || '' }}
+          CMAKE_CXX_FLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mcpu=apple-m1+noi8mm' || '' }}
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Build (cross)
