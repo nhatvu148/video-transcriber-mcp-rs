@@ -64,16 +64,17 @@ impl WhisperTranscriber {
             .context("Failed to transcribe audio")?;
 
         // Extract transcript
-        let num_segments = state
-            .full_n_segments()
-            .context("Failed to get segment count")?;
+        let num_segments = state.full_n_segments();
 
         let mut transcript = String::new();
         for i in 0..num_segments {
-            let segment_text = state
-                .full_get_segment_text(i)
+            let segment = state
+                .get_segment(i)
                 .context(format!("Failed to get segment {}", i))?;
-            transcript.push_str(&segment_text);
+            let text = segment
+                .to_str_lossy()
+                .context(format!("Failed to get text for segment {}", i))?;
+            transcript.push_str(&text);
             transcript.push(' ');
         }
 

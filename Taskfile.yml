@@ -338,11 +338,11 @@ tasks:
       - echo "✅ All checks passed! Ready for release."
 
   release:tag:
-    desc: "Create and push a release tag - usage: task release:tag VERSION=0.1.0"
+    desc: "Create and push a release tag - usage: task release:tag VERSION=0.1.1"
     cmds:
       - |
         if [ -z "{{.VERSION}}" ]; then
-          echo "❌ Please provide VERSION: task release:tag VERSION=0.1.0"
+          echo "❌ Please provide VERSION: task release:tag VERSION=0.1.1"
           exit 1
         fi
         echo "🏷️  Creating release tag v{{.VERSION}}..."
@@ -353,11 +353,11 @@ tasks:
       VERSION: '{{.VERSION | default ""}}'
 
   release:
-    desc: "Full release workflow - usage: task release VERSION=0.1.0"
+    desc: "Full release workflow - usage: task release VERSION=0.1.1"
     cmds:
       - |
         if [ -z "{{.VERSION}}" ]; then
-          echo "❌ Please provide VERSION: task release VERSION=0.1.0"
+          echo "❌ Please provide VERSION: task release VERSION=0.1.1"
           exit 1
         fi
         echo "🚀 Starting release v{{.VERSION}}..."
@@ -374,11 +374,11 @@ tasks:
       VERSION: '{{.VERSION | default ""}}'
 
   release:delete:
-    desc: "Delete a release tag - usage: task release:delete VERSION=0.1.0"
+    desc: "Delete a release tag - usage: task release:delete VERSION=0.1.1"
     cmds:
       - |
         if [ -z "{{.VERSION}}" ]; then
-          echo "❌ Please provide VERSION: task release:delete VERSION=0.1.0"
+          echo "❌ Please provide VERSION: task release:delete VERSION=0.1.1"
           exit 1
         fi
         echo "⚠️  Deleting tag v{{.VERSION}}..."
