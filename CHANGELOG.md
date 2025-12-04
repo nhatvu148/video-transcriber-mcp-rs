@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Updated `rmcp` from 0.9.1 to 0.10.0
-- Updated `whisper-rs` from 0.12 to 0.15
+- Updated `whisper-rs` from 0.12 to 0.15.1
 - Updated `thiserror` from 1.0 to 2.0
 - Updated `tokio` from 1.41 to 1.48
 - Updated `tempfile` from 3.13 to 3.23
