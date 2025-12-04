@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2025-12-04
+
+### Changed
+- Updated `rmcp` from 0.9.1 to 0.10.0
+- Updated `whisper-rs` from 0.12 to 0.15
+- Updated `thiserror` from 1.0 to 2.0
+- Updated `tokio` from 1.41 to 1.48
+- Updated `tempfile` from 3.13 to 3.23
+- Updated `async-process` from 2.3 to 2.5
+
+### Fixed
+- Adapted to whisper-rs 0.15 API changes (`get_segment().to_str_lossy()`)
+
 ## [0.1.0] - 2025-11-26
 
 ### 🎉 First Stable Release
@@ -63,4 +76,5 @@ This release marks the first production-ready version of video-transcriber-mcp!
 
 Initial development version with manual JSON-RPC implementation.
 
+[0.1.1]: https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/tag/v0.1.1
 [0.1.0]: https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/tag/v0.1.0
