@@ -22,7 +22,7 @@ async fn main() -> Result<()> {
         .with_ansi(false)
         .init();
 
-    tracing::info!("🚀 Video Transcriber MCP Server (Rust) - v0.1.0");
+    tracing::info!("🚀 Video Transcriber MCP Server (Rust) - v{}", env!("CARGO_PKG_VERSION"));
     tracing::info!("⚡ Powered by whisper.cpp - 6x faster than Python whisper!");
 
     // Create server

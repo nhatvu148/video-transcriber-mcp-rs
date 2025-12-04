@@ -79,8 +79,8 @@ impl McpServer {
                 "resources": {}
             },
             "serverInfo": {
-                "name": "video-transcriber-mcp",
-                "version": "0.1.0"
+                "name": env!("CARGO_PKG_NAME"),
+                "version": env!("CARGO_PKG_VERSION")
             }
         });
 

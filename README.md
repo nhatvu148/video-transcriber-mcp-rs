@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/nhatvu148/video-transcriber-mcp-rs/releases)
+[![Version](https://img.shields.io/crates/v/video-transcriber-mcp)](https://crates.io/crates/video-transcriber-mcp)
 
 A Model Context Protocol (MCP) server that transcribes videos from **1000+ platforms** using whisper.cpp. Built with Rust for maximum performance and efficiency.
 
