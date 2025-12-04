@@ -7,7 +7,7 @@ keywords = ["whisper", "transcription", "mcp", "video", "audio"]
 license = "MIT"
 name = "video-transcriber-mcp"
 repository = "https://github.com/nhatvu148/video-transcriber-mcp-rs"
-version = "0.1.0"
+version = "0.1.1"
 
 [[bin]]
 name = "video-transcriber-mcp"
