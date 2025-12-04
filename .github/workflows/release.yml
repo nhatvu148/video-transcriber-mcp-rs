@@ -23,11 +23,11 @@ jobs:
             binary: video-transcriber-mcp
             use_cross: false
 
-          # macOS Apple Silicon
-          - os: macos-15
-            target: aarch64-apple-darwin
-            binary: video-transcriber-mcp
-            use_cross: false
+          # macOS Apple Silicon - built locally due to whisper.cpp i8mm issue on GH runners
+          # - os: macos-15
+          #   target: aarch64-apple-darwin
+          #   binary: video-transcriber-mcp
+          #   use_cross: false
 
           # Linux x86_64
           - os: ubuntu-latest
@@ -62,9 +62,6 @@ jobs:
 
       - name: Build (native)
         if: ${{ !matrix.use_cross }}
-        env:
-          CMAKE_C_FLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mcpu=apple-m1+noi8mm' || '' }}
-          CMAKE_CXX_FLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-mcpu=apple-m1+noi8mm' || '' }}
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Build (cross)
