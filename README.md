@@ -380,10 +380,10 @@ MIT License - see [LICENSE](LICENSE) file for details
 ## 🙏 Acknowledgments
 
 - [whisper.cpp](https://github.com/ggerganov/whisper.cpp) - Fast C++ implementation of Whisper
-- [whisper-rs](https://github.com/tazz4843/whisper-rs) - Rust bindings for whisper.cpp
+- [whisper-rs](https://codeberg.org/tazz4843/whisper-rs) - Rust bindings for whisper.cpp
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) - Video downloader for 1000+ platforms
-- OpenAI Whisper - Original speech recognition model
-- Model Context Protocol SDK
+- [OpenAI Whisper](https://github.com/openai/whisper) - Original speech recognition model
+- [Model Context Protocol SDK](https://github.com/modelcontextprotocol/rust-sdk) - Rust SDK for MCP
 
 ## 🆚 Comparison with TypeScript Version
 
