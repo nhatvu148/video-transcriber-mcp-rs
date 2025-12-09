@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2025-12-09
+
+### Added
+- **Streamable HTTP transport** for remote MCP server access (MCP protocol 2025-03-26)
+  - New `--transport http` CLI option
+  - Configurable `--host` and `--port` options
+  - Single `/mcp` endpoint for all MCP communication
+  - Session-based communication with SSE streaming support
+- **CLI argument parsing** using clap for transport mode selection
+- **Dual transport support**: stdio (default) and HTTP
+- **Chrome extension example** for YouTube transcription
+- **HTTP proxy** (Node.js) for Claude Code HTTP compatibility
+- **axum** web framework (v0.8) for HTTP transport
+- **Comprehensive documentation**:
+  - `TESTING_HTTP.md` - HTTP testing guide
+  - `WHEN_TO_USE_HTTP.md` - Transport comparison and use cases
+  - `CLAUDE_CODE_HTTP_SETUP.md` - Claude Code HTTP setup
+  - `CHROME_EXTENSION_VIABILITY.md` - Product strategy and market analysis
+  - `PRODUCT_STRATEGY.md` - Business plan and competitive analysis
+- **Test tools**:
+  - Python test client (`test-mcp-client.py`)
+  - Bash test script (`test-http-mcp.sh`)
+  - Chrome extension (`chrome-extension-example/`)
+
+### Changed
+- Updated to support both stdio (local) and HTTP (remote) transport modes
+- Added `transport-streamable-http-server` feature to rmcp (v0.10.0)
+- Main entry point now accepts CLI arguments for transport selection
+- Logging configuration adapts based on transport mode (ANSI colors for HTTP)
+
+### Technical Details
+- Uses rmcp v0.10.0 with Streamable HTTP transport
+- Session-based architecture with LocalSessionManager
+- SSE streaming for real-time responses
+- Backward compatible (stdio is default)
+- No breaking changes to existing stdio usage
+
 ## [0.1.2] - 2025-12-04
 
 ### Changed
@@ -83,6 +120,7 @@ This release marks the first production-ready version of video-transcriber-mcp!
 
 Initial development version with manual JSON-RPC implementation.
 
+[0.2.0]: https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/tag/v0.2.0
 [0.1.2]: https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/tag/v0.1.2
 [0.1.1]: https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/tag/v0.1.1
 [0.1.0]: https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/tag/v0.1.0

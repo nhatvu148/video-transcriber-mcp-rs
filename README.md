@@ -76,6 +76,7 @@ Real-world performance depends on your hardware, video length, and chosen model.
 - 🌐 **90+ languages** supported
 - 📝 **Multiple output formats** (TXT, JSON, Markdown)
 - 🔌 **MCP integration** for Claude Code
+- 🌐 **Dual transport** - stdio (local) and Streamable HTTP (remote)
 - ⚡ **Native binary** - no Python or Node.js required
 - 💾 **Low memory footprint** compared to Python implementations
 
@@ -107,6 +108,68 @@ task help            # Show all commands
 ```
 
 See [Taskfile.yml](Taskfile.yml) for all available tasks.
+
+---
+
+## 🌐 Transport Modes
+
+The server supports two transport modes:
+
+### Stdio Transport (Default)
+
+Standard I/O transport for local CLI usage with Claude Code. This is the default mode.
+
+```bash
+video-transcriber-mcp
+# or explicitly:
+video-transcriber-mcp --transport stdio
+```
+
+### Streamable HTTP Transport
+
+HTTP transport for remote access. Allows the MCP server to be accessed over the network.
+
+```bash
+# Start HTTP server on default port (8080)
+video-transcriber-mcp --transport http
+
+# Custom host and port
+video-transcriber-mcp --transport http --host 0.0.0.0 --port 3000
+```
+
+**Remote MCP Client Configuration:**
+
+For HTTP transport, configure your MCP client with the URL:
+
+```json
+{
+  "mcpServers": {
+    "video-transcriber-mcp": {
+      "url": "http://localhost:8080/mcp"
+    }
+  }
+}
+```
+
+**Benefits of HTTP Transport:**
+- No local installation required for clients
+- Centralized server deployment
+- Automatic updates (server-side)
+- Better for team environments
+- Compatible with serverless platforms
+
+### CLI Options
+
+```bash
+video-transcriber-mcp --help
+
+Options:
+  -t, --transport <TRANSPORT>  Transport mode [default: stdio] [possible values: stdio, http]
+      --host <HOST>            Host address for HTTP transport [default: 127.0.0.1]
+  -p, --port <PORT>            Port for HTTP transport [default: 8080]
+  -h, --help                   Print help
+  -V, --version                Print version
+```
 
 ---
 
