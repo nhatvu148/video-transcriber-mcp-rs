@@ -145,6 +145,7 @@ This release marks the first production-ready version of video-transcriber-mcp!
 
 Initial development version with manual JSON-RPC implementation.
 
+[0.3.0]: https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/tag/v0.3.0
 [0.2.0]: https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/tag/v0.2.0
 [0.1.2]: https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/tag/v0.1.2
 [0.1.1]: https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/tag/v0.1.1

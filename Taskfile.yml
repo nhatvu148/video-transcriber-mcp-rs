@@ -388,6 +388,30 @@ tasks:
     vars:
       VERSION: '{{.VERSION | default ""}}'
 
+  release:arm64:
+    desc: "Build macOS ARM64 and upload to release - usage: task release:arm64 VERSION=0.3.0"
+    cmds:
+      - |
+        if [ -z "{{.VERSION}}" ]; then
+          echo "❌ Please provide VERSION: task release:arm64 VERSION=0.3.0"
+          exit 1
+        fi
+        echo "🍎 Building macOS ARM64 binary..."
+        rustup target add aarch64-apple-darwin
+        cargo build --release --target aarch64-apple-darwin
+
+        echo "📦 Packaging binary..."
+        cd target/aarch64-apple-darwin/release
+        tar czf ../../../video-transcriber-mcp-aarch64-apple-darwin.tar.gz video-transcriber-mcp
+        cd ../../..
+
+        echo "📤 Uploading to GitHub release v{{.VERSION}}..."
+        gh release upload v{{.VERSION}} video-transcriber-mcp-aarch64-apple-darwin.tar.gz
+
+        echo "✅ ARM64 binary uploaded to release v{{.VERSION}}!"
+    vars:
+      VERSION: '{{.VERSION | default ""}}'
+
   # Help and documentation
   help:
     desc: Show available tasks
