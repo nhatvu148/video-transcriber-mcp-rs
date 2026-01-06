@@ -387,6 +387,11 @@ tasks:
         echo "✅ Tag v{{.VERSION}} deleted"
     vars:
       VERSION: '{{.VERSION | default ""}}'
+  
+  release:cargo:
+    desc: "Release to crates.io"
+    cmds:
+      - cargo publish # --dry-run
 
   release:arm64:
     desc: "Build macOS ARM64 and upload to release - usage: task release:arm64 VERSION=0.3.0"
