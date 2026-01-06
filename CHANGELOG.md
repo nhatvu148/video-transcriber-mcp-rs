@@ -5,9 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-01-06
+
+### Changed
+
+- Updated rmcp from 0.10.0 to 0.12.0
+- Updated tokio from 1.48 to 1.49
+- Updated tempfile from 3.23 to 3.24
+- Updated whisper-rs from 0.15.1 to 0.15
+
+### Fixed
+
+- Added `meta` field to `ListToolsResult` for rmcp 0.12 compatibility
+
 ## [0.2.0] - 2025-12-09
 
 ### Added
+
 - **Streamable HTTP transport** for remote MCP server access (MCP protocol 2025-03-26)
   - New `--transport http` CLI option
   - Configurable `--host` and `--port` options
@@ -30,12 +44,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Chrome extension (`chrome-extension-example/`)
 
 ### Changed
+
 - Updated to support both stdio (local) and HTTP (remote) transport modes
 - Added `transport-streamable-http-server` feature to rmcp (v0.10.0)
 - Main entry point now accepts CLI arguments for transport selection
 - Logging configuration adapts based on transport mode (ANSI colors for HTTP)
 
 ### Technical Details
+
 - Uses rmcp v0.10.0 with Streamable HTTP transport
 - Session-based architecture with LocalSessionManager
 - SSE streaming for real-time responses
@@ -45,6 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.2] - 2025-12-04
 
 ### Changed
+
 - Use `env!("CARGO_PKG_VERSION")` macro for version strings (single source of truth)
 - Install script now fetches latest version from GitHub API
 - README badge now pulls version dynamically from crates.io
@@ -52,6 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.1] - 2025-12-04
 
 ### Changed
+
 - Updated `rmcp` from 0.9.1 to 0.10.0
 - Updated `whisper-rs` from 0.12 to 0.15.1
 - Updated `thiserror` from 1.0 to 2.0
@@ -60,6 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated `async-process` from 2.3 to 2.5
 
 ### Fixed
+
 - Adapted to whisper-rs 0.15 API changes (`get_segment().to_str_lossy()`)
 
 ## [0.1.0] - 2025-11-26
@@ -69,24 +88,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 This release marks the first production-ready version of video-transcriber-mcp!
 
 ### Changed
+
 - **BREAKING**: Migrated from manual JSON-RPC implementation to official `rmcp` SDK (v0.9.1)
 - Renamed project from `video-transcriber-rs` to `video-transcriber-mcp` for clarity
 - Server now uses `ServerHandler` trait for proper MCP integration
 - Improved MCP protocol compliance and full compatibility with Claude Code
 
 ### Added
+
 - Full support for MCP protocol version 2024-11-05
 - Proper capabilities advertisement through official SDK
 - Better error handling with structured ErrorData
 - Comprehensive CHANGELOG documentation
 
 ### Fixed
+
 - MCP capabilities now properly displayed in Claude Code
 - Tools list correctly exposed to MCP clients (4 tools)
 - Server initialization follows official MCP specification
 - Switched from OpenSSL to rustls-tls for better cross-compilation support
 
 ### Features (Stable)
+
 - ⚡ **High-performance transcription** using whisper.cpp (C++ with Rust bindings)
 - 🌐 **1000+ video platforms** supported via yt-dlp
 - 📁 **Local video files** transcription support
@@ -103,6 +126,7 @@ This release marks the first production-ready version of video-transcriber-mcp!
 - 📦 **Standalone binary** - no Python or Node.js required
 
 ### Performance Characteristics
+
 - Native binary with instant startup (<100ms)
 - Lower memory footprint compared to Python implementations
 - Binary size: 2.3MB (optimized release build)
@@ -110,6 +134,7 @@ This release marks the first production-ready version of video-transcriber-mcp!
 - Generally faster than Python-based Whisper implementations
 
 ### Documentation
+
 - Complete README with installation and usage
 - CLAUDE_SETUP.md for Claude Code integration
 - FEATURE_PARITY.md comparing with TypeScript version
