@@ -135,6 +135,7 @@ impl ServerHandler for VideoTranscriberServer {
                 },
             ],
             next_cursor: None,
+            meta: None,
         })
     }
 
