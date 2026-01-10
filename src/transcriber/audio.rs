@@ -17,7 +17,12 @@ impl AudioProcessor {
     pub async fn extract_audio(&self, video_path: &Path) -> Result<PathBuf> {
         info!("🎵 Extracting audio from video...");
 
-        let output_path = self.temp_dir.path().join("audio.mp3");
+        // Generate unique filename to avoid conflicts when processing multiple videos
+        let unique_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let output_path = self.temp_dir.path().join(format!("audio_{}.mp3", unique_id));
 
         let output = Command::new("ffmpeg")
             .args(&[
@@ -44,7 +49,7 @@ impl AudioProcessor {
             anyhow::bail!("Extracted audio file not found");
         }
 
-        info!("✅ Audio extracted successfully");
+        info!("✅ Audio extracted successfully to {}", output_path.display());
 
         Ok(output_path)
     }

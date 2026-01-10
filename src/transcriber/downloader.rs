@@ -71,7 +71,13 @@ impl VideoDownloader {
     }
 
     async fn download_audio(&self, url: &str) -> Result<PathBuf> {
-        let output_template = self.temp_dir.path().join("video.%(ext)s");
+        // Generate unique filename to avoid conflicts when downloading multiple videos
+        let unique_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let output_template = self.temp_dir.path().join(format!("video_{}.%(ext)s", unique_id));
+        let expected_path = self.temp_dir.path().join(format!("video_{}.mp3", unique_id));
 
         let output = Command::new("yt-dlp")
             .args(&[
@@ -92,12 +98,13 @@ impl VideoDownloader {
         }
 
         // Find the downloaded file
-        let audio_path = self.temp_dir.path().join("video.mp3");
-        if !audio_path.exists() {
-            anyhow::bail!("Downloaded audio file not found");
+        if !expected_path.exists() {
+            anyhow::bail!("Downloaded audio file not found at {}", expected_path.display());
         }
 
-        Ok(audio_path)
+        info!("✅ Downloaded audio to {}", expected_path.display());
+
+        Ok(expected_path)
     }
 }
 
