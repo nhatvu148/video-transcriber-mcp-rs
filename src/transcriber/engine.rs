@@ -4,13 +4,21 @@ use tracing::info;
 
 use super::audio::AudioProcessor;
 use super::downloader::VideoDownloader;
-use super::types::{TranscriptionOptions, TranscriptionResult, VideoMetadata, OutputFiles, WhisperModel};
+use super::types::{
+    OutputFiles, TranscriptionOptions, TranscriptionResult, VideoMetadata, WhisperModel,
+};
 use super::whisper::WhisperTranscriber;
 
 pub struct TranscriberEngine {
     whisper: WhisperTranscriber,
     downloader: VideoDownloader,
     audio_processor: AudioProcessor,
+}
+
+impl Default for TranscriberEngine {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TranscriberEngine {
@@ -44,20 +52,17 @@ impl TranscriberEngine {
             (metadata, audio_path)
         };
 
-        info!("🎤 Transcribing audio with Whisper ({:?} model)...", options.model);
-        let transcript = self.whisper.transcribe(
-            &audio_path,
-            options.model,
-            options.language.as_deref(),
-        )?;
+        info!(
+            "🎤 Transcribing audio with Whisper ({:?} model)...",
+            options.model
+        );
+        let transcript =
+            self.whisper
+                .transcribe(&audio_path, options.model, options.language.as_deref())?;
 
         // Save output files
-        let files = self.save_outputs(
-            &metadata,
-            &transcript,
-            &options.output_dir,
-            options.model,
-        )?;
+        let files =
+            self.save_outputs(&metadata, &transcript, &options.output_dir, options.model)?;
 
         // Calculate stats
         let word_count = transcript.split_whitespace().count();
@@ -169,13 +174,19 @@ impl TranscriberEngine {
         let mut status = String::new();
 
         // Check yt-dlp
-        match std::process::Command::new("yt-dlp").arg("--version").output() {
+        match std::process::Command::new("yt-dlp")
+            .arg("--version")
+            .output()
+        {
             Ok(_) => status.push_str("✅ yt-dlp: installed\n"),
             Err(_) => status.push_str("❌ yt-dlp: NOT installed\n"),
         }
 
         // Check ffmpeg
-        match std::process::Command::new("ffmpeg").arg("-version").output() {
+        match std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+        {
             Ok(_) => status.push_str("✅ ffmpeg: installed\n"),
             Err(_) => status.push_str("❌ ffmpeg: NOT installed\n"),
         }

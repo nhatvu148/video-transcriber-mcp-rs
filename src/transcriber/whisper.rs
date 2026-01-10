@@ -10,6 +10,12 @@ pub struct WhisperTranscriber {
     models_dir: PathBuf,
 }
 
+impl Default for WhisperTranscriber {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WhisperTranscriber {
     pub fn new() -> Self {
         let models_dir = get_models_dir();
@@ -39,11 +45,11 @@ impl WhisperTranscriber {
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
 
         // Set language if specified
-        if let Some(lang) = language {
-            if lang != "auto" {
-                params.set_language(Some(lang));
-                params.set_translate(false);
-            }
+        if let Some(lang) = language
+            && lang != "auto"
+        {
+            params.set_language(Some(lang));
+            params.set_translate(false);
         }
 
         // Performance optimizations
@@ -57,7 +63,9 @@ impl WhisperTranscriber {
         let audio_data = self.load_audio_as_pcm(audio_path)?;
 
         info!("Transcribing... (this may take a few minutes)");
-        let mut state = ctx.create_state().context("Failed to create Whisper state")?;
+        let mut state = ctx
+            .create_state()
+            .context("Failed to create Whisper state")?;
 
         state
             .full(params, &audio_data[..])
@@ -107,7 +115,7 @@ impl WhisperTranscriber {
         info!("Converting audio to 16kHz mono PCM...");
 
         let output = std::process::Command::new("ffmpeg")
-            .args(&[
+            .args([
                 "-i",
                 audio_path.to_str().unwrap(),
                 "-ar",
@@ -122,10 +130,7 @@ impl WhisperTranscriber {
             .context("Failed to run ffmpeg")?;
 
         if !output.status.success() {
-            anyhow::bail!(
-                "ffmpeg failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            anyhow::bail!("ffmpeg failed: {}", String::from_utf8_lossy(&output.stderr));
         }
 
         // Convert bytes to f32 samples
@@ -159,7 +164,12 @@ impl WhisperTranscriber {
                 let size = std::fs::metadata(&model_path)
                     .map(|m| format!("{:.1} MB", m.len() as f64 / 1_000_000.0))
                     .unwrap_or_else(|_| "unknown".to_string());
-                status.push_str(&format!("  ✅ {:?}: {} ({})\n", model, model_path.display(), size));
+                status.push_str(&format!(
+                    "  ✅ {:?}: {} ({})\n",
+                    model,
+                    model_path.display(),
+                    size
+                ));
             } else {
                 status.push_str(&format!("  ❌ {:?}: not installed\n", model));
             }

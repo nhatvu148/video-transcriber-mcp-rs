@@ -8,6 +8,12 @@ pub struct AudioProcessor {
     temp_dir: TempDir,
 }
 
+impl Default for AudioProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AudioProcessor {
     pub fn new() -> Self {
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
@@ -22,16 +28,21 @@ impl AudioProcessor {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let output_path = self.temp_dir.path().join(format!("audio_{}.mp3", unique_id));
+        let output_path = self
+            .temp_dir
+            .path()
+            .join(format!("audio_{}.mp3", unique_id));
 
         let output = Command::new("ffmpeg")
-            .args(&[
+            .args([
                 "-i",
                 video_path.to_str().unwrap(),
-                "-vn",              // No video
-                "-acodec", "libmp3lame", // MP3 codec
-                "-q:a", "2",        // Quality (2 is high quality)
-                "-y",               // Overwrite output file
+                "-vn", // No video
+                "-acodec",
+                "libmp3lame", // MP3 codec
+                "-q:a",
+                "2",  // Quality (2 is high quality)
+                "-y", // Overwrite output file
                 output_path.to_str().unwrap(),
             ])
             .output()
@@ -49,7 +60,10 @@ impl AudioProcessor {
             anyhow::bail!("Extracted audio file not found");
         }
 
-        info!("✅ Audio extracted successfully to {}", output_path.display());
+        info!(
+            "✅ Audio extracted successfully to {}",
+            output_path.display()
+        );
 
         Ok(output_path)
     }

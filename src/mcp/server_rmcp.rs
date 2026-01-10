@@ -1,8 +1,8 @@
 use anyhow::Result;
 use rmcp::{
+    ServerHandler,
     model::*,
     service::{RequestContext, RoleServer},
-    ServerHandler,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -15,6 +15,12 @@ use crate::utils::paths::get_default_output_dir;
 #[derive(Clone)]
 pub struct VideoTranscriberServer {
     transcriber: Arc<Mutex<TranscriberEngine>>,
+}
+
+impl Default for VideoTranscriberServer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl VideoTranscriberServer {
@@ -250,14 +256,22 @@ impl ServerHandler for VideoTranscriberServer {
         match request.name.as_ref() {
             "transcribe_video" => {
                 let args = request.arguments.as_ref().ok_or_else(|| {
-                    ErrorData::new(ErrorCode::INVALID_PARAMS, "Missing arguments".to_string(), None)
+                    ErrorData::new(
+                        ErrorCode::INVALID_PARAMS,
+                        "Missing arguments".to_string(),
+                        None,
+                    )
                 })?;
 
                 let url = args
                     .get("url")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| {
-                        ErrorData::new(ErrorCode::INVALID_PARAMS, "Missing 'url' parameter".to_string(), None)
+                        ErrorData::new(
+                            ErrorCode::INVALID_PARAMS,
+                            "Missing 'url' parameter".to_string(),
+                            None,
+                        )
                     })?
                     .to_string();
 
@@ -402,7 +416,7 @@ impl ServerHandler for VideoTranscriberServer {
                                 filename.split('-').next().unwrap_or("unknown").to_string();
                             video_groups
                                 .entry(video_id)
-                                .or_insert_with(Vec::new)
+                                .or_default()
                                 .push(filename.to_string());
                         }
                     }
@@ -453,13 +467,14 @@ impl ServerHandler for VideoTranscriberServer {
                 };
 
                 let mut list_items = Vec::new();
-                for (i, (video_id, files, modified, full_path)) in videos_to_show.iter().enumerate() {
+                for (i, (video_id, files, modified, full_path)) in videos_to_show.iter().enumerate()
+                {
                     let main_file = files
                         .iter()
                         .find(|f| f.ends_with(".txt"))
                         .unwrap_or(&files[0]);
 
-                    if let Ok(metadata) = fs::metadata(&full_path) {
+                    if let Ok(metadata) = fs::metadata(full_path) {
                         let size_kb = metadata.len() as f64 / 1024.0;
 
                         let title = main_file
@@ -471,7 +486,7 @@ impl ServerHandler for VideoTranscriberServer {
 
                         let extensions: Vec<&str> = files
                             .iter()
-                            .filter_map(|f| f.split('.').last())
+                            .filter_map(|f| f.split('.').next_back())
                             .collect();
 
                         list_items.push(format!(
@@ -492,7 +507,10 @@ impl ServerHandler for VideoTranscriberServer {
                 let showing_count = videos_to_show.len();
 
                 let summary = if showing_count < total_count {
-                    format!("showing {} most recent out of {} total", showing_count, total_count)
+                    format!(
+                        "showing {} most recent out of {} total",
+                        showing_count, total_count
+                    )
                 } else {
                     format!("{} videos", total_count)
                 };
@@ -539,7 +557,7 @@ impl ServerHandler for VideoTranscriberServer {
                                 filename.split('-').next().unwrap_or("unknown").to_string();
                             video_groups
                                 .entry(video_id)
-                                .or_insert_with(Vec::new)
+                                .or_default()
                                 .push(filename.to_string());
                         }
                     }
@@ -577,10 +595,12 @@ impl ServerHandler for VideoTranscriberServer {
 
                         if let Some((_, _, latest_time, _)) = &latest_transcript {
                             if modified > *latest_time {
-                                latest_transcript = Some((video_id.clone(), files.clone(), modified, full_path));
+                                latest_transcript =
+                                    Some((video_id.clone(), files.clone(), modified, full_path));
                             }
                         } else {
-                            latest_transcript = Some((video_id.clone(), files.clone(), modified, full_path));
+                            latest_transcript =
+                                Some((video_id.clone(), files.clone(), modified, full_path));
                         }
                     }
                 }
@@ -603,13 +623,24 @@ impl ServerHandler for VideoTranscriberServer {
 
                         let extensions: Vec<&str> = files
                             .iter()
-                            .filter_map(|f| f.split('.').last())
+                            .filter_map(|f| f.split('.').next_back())
                             .collect();
 
                         // Find paths for all file types
-                        let txt_path = output_dir.join(files.iter().find(|f| f.ends_with(".txt")).unwrap_or(&files[0]));
-                        let md_path = files.iter().find(|f| f.ends_with(".md")).map(|f| output_dir.join(f));
-                        let json_path = files.iter().find(|f| f.ends_with(".json")).map(|f| output_dir.join(f));
+                        let txt_path = output_dir.join(
+                            files
+                                .iter()
+                                .find(|f| f.ends_with(".txt"))
+                                .unwrap_or(&files[0]),
+                        );
+                        let md_path = files
+                            .iter()
+                            .find(|f| f.ends_with(".md"))
+                            .map(|f| output_dir.join(f));
+                        let json_path = files
+                            .iter()
+                            .find(|f| f.ends_with(".json"))
+                            .map(|f| output_dir.join(f));
 
                         let mut file_paths = format!("- Text: {}", txt_path.display());
                         if let Some(md) = md_path {
@@ -656,14 +687,22 @@ impl ServerHandler for VideoTranscriberServer {
                 use std::path::PathBuf;
 
                 let args = request.arguments.as_ref().ok_or_else(|| {
-                    ErrorData::new(ErrorCode::INVALID_PARAMS, "Missing arguments".to_string(), None)
+                    ErrorData::new(
+                        ErrorCode::INVALID_PARAMS,
+                        "Missing arguments".to_string(),
+                        None,
+                    )
                 })?;
 
                 let video_id = args
                     .get("video_id")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| {
-                        ErrorData::new(ErrorCode::INVALID_PARAMS, "Missing 'video_id' parameter".to_string(), None)
+                        ErrorData::new(
+                            ErrorCode::INVALID_PARAMS,
+                            "Missing 'video_id' parameter".to_string(),
+                            None,
+                        )
                     })?;
 
                 let output_dir = args
@@ -684,10 +723,10 @@ impl ServerHandler for VideoTranscriberServer {
                         let path = entry.path();
                         let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-                        if filename.starts_with(&format!("{}-", video_id)) {
-                            if let Ok(_) = fs::remove_file(&path) {
-                                deleted_files.push(path.display().to_string());
-                            }
+                        if filename.starts_with(&format!("{}-", video_id))
+                            && fs::remove_file(&path).is_ok()
+                        {
+                            deleted_files.push(path.display().to_string());
                         }
                     }
                 }
@@ -700,7 +739,11 @@ impl ServerHandler for VideoTranscriberServer {
                         "🗑️ Deleted {} file(s) for video ID '{}':\n\n{}",
                         deleted_files.len(),
                         video_id,
-                        deleted_files.iter().map(|f| format!("- {}", f)).collect::<Vec<_>>().join("\n")
+                        deleted_files
+                            .iter()
+                            .map(|f| format!("- {}", f))
+                            .collect::<Vec<_>>()
+                            .join("\n")
                     );
                     Ok(CallToolResult::success(vec![Content::text(text)]))
                 }
@@ -709,18 +752,23 @@ impl ServerHandler for VideoTranscriberServer {
             "cleanup_old_transcripts" => {
                 use std::fs;
                 use std::path::PathBuf;
-                use std::time::{SystemTime, Duration};
+                use std::time::{Duration, SystemTime};
 
                 let args = request.arguments.as_ref().ok_or_else(|| {
-                    ErrorData::new(ErrorCode::INVALID_PARAMS, "Missing arguments".to_string(), None)
+                    ErrorData::new(
+                        ErrorCode::INVALID_PARAMS,
+                        "Missing arguments".to_string(),
+                        None,
+                    )
                 })?;
 
-                let days = args
-                    .get("days")
-                    .and_then(|v| v.as_u64())
-                    .ok_or_else(|| {
-                        ErrorData::new(ErrorCode::INVALID_PARAMS, "Missing or invalid 'days' parameter".to_string(), None)
-                    })?;
+                let days = args.get("days").and_then(|v| v.as_u64()).ok_or_else(|| {
+                    ErrorData::new(
+                        ErrorCode::INVALID_PARAMS,
+                        "Missing or invalid 'days' parameter".to_string(),
+                        None,
+                    )
+                })?;
 
                 let output_dir = args
                     .get("output_dir")
@@ -740,14 +788,12 @@ impl ServerHandler for VideoTranscriberServer {
                     for entry in entries.flatten() {
                         let path = entry.path();
 
-                        if let Ok(metadata) = fs::metadata(&path) {
-                            if let Ok(modified) = metadata.modified() {
-                                if modified < cutoff_time {
-                                    if let Ok(_) = fs::remove_file(&path) {
-                                        deleted_files.push(path.display().to_string());
-                                    }
-                                }
-                            }
+                        if let Ok(metadata) = fs::metadata(&path)
+                            && let Ok(modified) = metadata.modified()
+                            && modified < cutoff_time
+                            && fs::remove_file(&path).is_ok()
+                        {
+                            deleted_files.push(path.display().to_string());
                         }
                     }
                 }
@@ -760,7 +806,11 @@ impl ServerHandler for VideoTranscriberServer {
                         "🗑️ Deleted {} file(s) older than {} days:\n\n{}",
                         deleted_files.len(),
                         days,
-                        deleted_files.iter().map(|f| format!("- {}", f)).collect::<Vec<_>>().join("\n")
+                        deleted_files
+                            .iter()
+                            .map(|f| format!("- {}", f))
+                            .collect::<Vec<_>>()
+                            .join("\n")
                     );
                     Ok(CallToolResult::success(vec![Content::text(text)]))
                 }
@@ -771,7 +821,11 @@ impl ServerHandler for VideoTranscriberServer {
                 use std::path::PathBuf;
 
                 let args = request.arguments.as_ref().ok_or_else(|| {
-                    ErrorData::new(ErrorCode::INVALID_PARAMS, "Missing arguments".to_string(), None)
+                    ErrorData::new(
+                        ErrorCode::INVALID_PARAMS,
+                        "Missing arguments".to_string(),
+                        None,
+                    )
                 })?;
 
                 let confirm = args
@@ -799,10 +853,8 @@ impl ServerHandler for VideoTranscriberServer {
                 if let Ok(entries) = fs::read_dir(&output_dir) {
                     for entry in entries.flatten() {
                         let path = entry.path();
-                        if path.is_file() {
-                            if let Ok(_) = fs::remove_file(&path) {
-                                deleted_count += 1;
-                            }
+                        if path.is_file() && fs::remove_file(&path).is_ok() {
+                            deleted_count += 1;
                         }
                     }
                 }
@@ -811,7 +863,11 @@ impl ServerHandler for VideoTranscriberServer {
                     let text = "📂 No transcripts found to delete.".to_string();
                     Ok(CallToolResult::success(vec![Content::text(text)]))
                 } else {
-                    let text = format!("🗑️ Deleted ALL transcripts: {} file(s) removed from {}", deleted_count, output_dir.display());
+                    let text = format!(
+                        "🗑️ Deleted ALL transcripts: {} file(s) removed from {}",
+                        deleted_count,
+                        output_dir.display()
+                    );
                     Ok(CallToolResult::success(vec![Content::text(text)]))
                 }
             }

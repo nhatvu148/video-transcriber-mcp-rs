@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use rmcp::{
-    transport::{stdio, streamable_http_server::StreamableHttpService},
     ServiceExt,
+    transport::{stdio, streamable_http_server::StreamableHttpService},
 };
 use tracing::Level;
 
