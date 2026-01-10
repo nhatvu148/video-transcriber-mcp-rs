@@ -158,6 +158,84 @@ impl ServerHandler for VideoTranscriberServer {
                     icons: None,
                     meta: None,
                 },
+                Tool {
+                    name: "delete_transcript".into(),
+                    title: None,
+                    description: Some("Delete a specific transcript by video ID. This removes all associated files (txt, json, md).".into()),
+                    input_schema: Arc::new(
+                        serde_json::from_value(json!({
+                            "type": "object",
+                            "properties": {
+                                "video_id": {
+                                    "type": "string",
+                                    "description": "The video ID of the transcript to delete (e.g., 'dQw4w9WgXcQ')"
+                                },
+                                "output_dir": {
+                                    "type": "string",
+                                    "description": format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
+                                }
+                            },
+                            "required": ["video_id"]
+                        }))
+                        .unwrap(),
+                    ),
+                    output_schema: None,
+                    annotations: None,
+                    icons: None,
+                    meta: None,
+                },
+                Tool {
+                    name: "cleanup_old_transcripts".into(),
+                    title: None,
+                    description: Some("Delete transcripts older than a specified number of days. Helps manage disk space.".into()),
+                    input_schema: Arc::new(
+                        serde_json::from_value(json!({
+                            "type": "object",
+                            "properties": {
+                                "days": {
+                                    "type": "number",
+                                    "description": "Delete transcripts older than this many days (e.g., 30 for month-old transcripts)"
+                                },
+                                "output_dir": {
+                                    "type": "string",
+                                    "description": format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
+                                }
+                            },
+                            "required": ["days"]
+                        }))
+                        .unwrap(),
+                    ),
+                    output_schema: None,
+                    annotations: None,
+                    icons: None,
+                    meta: None,
+                },
+                Tool {
+                    name: "delete_all_transcripts".into(),
+                    title: None,
+                    description: Some("Delete ALL transcripts in the output directory. Use with caution - this cannot be undone!".into()),
+                    input_schema: Arc::new(
+                        serde_json::from_value(json!({
+                            "type": "object",
+                            "properties": {
+                                "output_dir": {
+                                    "type": "string",
+                                    "description": format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
+                                },
+                                "confirm": {
+                                    "type": "boolean",
+                                    "description": "Must be set to true to confirm deletion of all transcripts"
+                                }
+                            },
+                            "required": ["confirm"]
+                        }))
+                        .unwrap(),
+                    ),
+                    output_schema: None,
+                    annotations: None,
+                    icons: None,
+                    meta: None,
+                },
             ],
             next_cursor: None,
             meta: None,
@@ -569,6 +647,171 @@ impl ServerHandler for VideoTranscriberServer {
                     }
                 } else {
                     let text = "📂 No transcripts found.".to_string();
+                    Ok(CallToolResult::success(vec![Content::text(text)]))
+                }
+            }
+
+            "delete_transcript" => {
+                use std::fs;
+                use std::path::PathBuf;
+
+                let args = request.arguments.as_ref().ok_or_else(|| {
+                    ErrorData::new(ErrorCode::INVALID_PARAMS, "Missing arguments".to_string(), None)
+                })?;
+
+                let video_id = args
+                    .get("video_id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        ErrorData::new(ErrorCode::INVALID_PARAMS, "Missing 'video_id' parameter".to_string(), None)
+                    })?;
+
+                let output_dir = args
+                    .get("output_dir")
+                    .and_then(|v| v.as_str())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(get_default_output_dir);
+
+                if !output_dir.exists() {
+                    let text = "📂 No transcripts directory found.".to_string();
+                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                }
+
+                // Find all files matching the video_id
+                let mut deleted_files = Vec::new();
+                if let Ok(entries) = fs::read_dir(&output_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+                        if filename.starts_with(&format!("{}-", video_id)) {
+                            if let Ok(_) = fs::remove_file(&path) {
+                                deleted_files.push(path.display().to_string());
+                            }
+                        }
+                    }
+                }
+
+                if deleted_files.is_empty() {
+                    let text = format!("⚠️ No transcripts found for video ID: {}", video_id);
+                    Ok(CallToolResult::success(vec![Content::text(text)]))
+                } else {
+                    let text = format!(
+                        "🗑️ Deleted {} file(s) for video ID '{}':\n\n{}",
+                        deleted_files.len(),
+                        video_id,
+                        deleted_files.iter().map(|f| format!("- {}", f)).collect::<Vec<_>>().join("\n")
+                    );
+                    Ok(CallToolResult::success(vec![Content::text(text)]))
+                }
+            }
+
+            "cleanup_old_transcripts" => {
+                use std::fs;
+                use std::path::PathBuf;
+                use std::time::{SystemTime, Duration};
+
+                let args = request.arguments.as_ref().ok_or_else(|| {
+                    ErrorData::new(ErrorCode::INVALID_PARAMS, "Missing arguments".to_string(), None)
+                })?;
+
+                let days = args
+                    .get("days")
+                    .and_then(|v| v.as_u64())
+                    .ok_or_else(|| {
+                        ErrorData::new(ErrorCode::INVALID_PARAMS, "Missing or invalid 'days' parameter".to_string(), None)
+                    })?;
+
+                let output_dir = args
+                    .get("output_dir")
+                    .and_then(|v| v.as_str())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(get_default_output_dir);
+
+                if !output_dir.exists() {
+                    let text = "📂 No transcripts directory found.".to_string();
+                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                }
+
+                let cutoff_time = SystemTime::now() - Duration::from_secs(days * 24 * 60 * 60);
+                let mut deleted_files = Vec::new();
+
+                if let Ok(entries) = fs::read_dir(&output_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+
+                        if let Ok(metadata) = fs::metadata(&path) {
+                            if let Ok(modified) = metadata.modified() {
+                                if modified < cutoff_time {
+                                    if let Ok(_) = fs::remove_file(&path) {
+                                        deleted_files.push(path.display().to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if deleted_files.is_empty() {
+                    let text = format!("✅ No transcripts older than {} days found.", days);
+                    Ok(CallToolResult::success(vec![Content::text(text)]))
+                } else {
+                    let text = format!(
+                        "🗑️ Deleted {} file(s) older than {} days:\n\n{}",
+                        deleted_files.len(),
+                        days,
+                        deleted_files.iter().map(|f| format!("- {}", f)).collect::<Vec<_>>().join("\n")
+                    );
+                    Ok(CallToolResult::success(vec![Content::text(text)]))
+                }
+            }
+
+            "delete_all_transcripts" => {
+                use std::fs;
+                use std::path::PathBuf;
+
+                let args = request.arguments.as_ref().ok_or_else(|| {
+                    ErrorData::new(ErrorCode::INVALID_PARAMS, "Missing arguments".to_string(), None)
+                })?;
+
+                let confirm = args
+                    .get("confirm")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                if !confirm {
+                    let text = "⚠️ Deletion not confirmed. Set 'confirm' to true to delete all transcripts.".to_string();
+                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                }
+
+                let output_dir = args
+                    .get("output_dir")
+                    .and_then(|v| v.as_str())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(get_default_output_dir);
+
+                if !output_dir.exists() {
+                    let text = "📂 No transcripts directory found.".to_string();
+                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                }
+
+                let mut deleted_count = 0;
+                if let Ok(entries) = fs::read_dir(&output_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_file() {
+                            if let Ok(_) = fs::remove_file(&path) {
+                                deleted_count += 1;
+                            }
+                        }
+                    }
+                }
+
+                if deleted_count == 0 {
+                    let text = "📂 No transcripts found to delete.".to_string();
+                    Ok(CallToolResult::success(vec![Content::text(text)]))
+                } else {
+                    let text = format!("🗑️ Deleted ALL transcripts: {} file(s) removed from {}", deleted_count, output_dir.display());
                     Ok(CallToolResult::success(vec![Content::text(text)]))
                 }
             }
