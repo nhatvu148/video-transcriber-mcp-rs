@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-01-10
+
+### Added
+
+- **Transcript management tools** for better organization and cleanup:
+  - `get_latest_transcript`: Get the most recently created/modified transcript
+  - `delete_transcript`: Delete specific transcript by video ID (removes all files: txt, json, md)
+  - `cleanup_old_transcripts`: Delete transcripts older than specified number of days
+  - `delete_all_transcripts`: Delete all transcripts with confirmation requirement
+
+### Changed
+
+- **list_transcripts improvements**:
+  - Now sorts transcripts by modification time (newest first)
+  - Added optional `limit` parameter to show only N most recent transcripts
+  - Shows count summary (e.g., "showing 5 most recent out of 20 total")
+
+### Fixed
+
+- **Critical bug**: Fixed duplicate transcript content issue
+  - Audio files and downloaded videos now use unique timestamp-based filenames
+  - Prevents file collisions when processing multiple videos sequentially
+  - Each transcription now gets completely independent audio processing
+- Added debug logging for audio extraction and download paths
+
 ## [0.3.0] - 2026-01-06
 
 ### Changed
@@ -145,6 +170,7 @@ This release marks the first production-ready version of video-transcriber-mcp!
 
 Initial development version with manual JSON-RPC implementation.
 
+[0.4.0]: https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/tag/v0.4.0
 [0.3.0]: https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/tag/v0.3.0
 [0.2.0]: https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/tag/v0.2.0
 [0.1.2]: https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/tag/v0.1.2
