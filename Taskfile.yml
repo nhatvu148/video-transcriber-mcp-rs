@@ -1,7 +1,12 @@
 version: '3'
 
+# Auto-load secrets/config from .env (gitignored) and .env.local (per-machine override).
+# Copy .env.example → .env and fill in your keys to get started.
+dotenv: ['.env', '.env.local']
+
 vars:
   BINARY: ./target/release/video-transcriber-mcp
+  BINARY_DEV: ./target/debug/video-transcriber-mcp
   TEST_VIDEO: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
   MODELS_DIR: "{{.HOME}}/.cache/video-transcriber-mcp/models"
 
@@ -433,7 +438,9 @@ tasks:
           cat README.md
         fi
 
+  # ---------------------------------------------------------------------------
   # MCP Server tasks
+  # ---------------------------------------------------------------------------
   mcp:test:
     desc: Test MCP server with stdio
     deps: [build]

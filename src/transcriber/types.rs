@@ -67,6 +67,13 @@ pub struct OutputFiles {
     pub md: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Segment {
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub text: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct TranscriptionResult {
     #[allow(dead_code)]
@@ -75,6 +82,7 @@ pub struct TranscriptionResult {
     pub metadata: VideoMetadata,
     #[allow(dead_code)]
     pub transcript: String,
+    pub segments: Vec<Segment>,
     pub transcript_preview: String,
     pub word_count: usize,
     pub model_used: WhisperModel,

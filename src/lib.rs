@@ -1,3 +1,5 @@
+pub mod api;
+pub mod llm;
 pub mod mcp;
 pub mod transcriber;
 pub mod utils;

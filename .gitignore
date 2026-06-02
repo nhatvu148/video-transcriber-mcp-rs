@@ -1,6 +1,5 @@
 # Rust
 /target/
-Cargo.lock
 **/*.rs.bk
 *.pdb
 
@@ -25,3 +24,11 @@ models/
 
 # Output
 transcripts/
+
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+
+# Task tool's internal cache (regenerated on every build)
+.task/

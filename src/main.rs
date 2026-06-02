@@ -4,13 +4,20 @@ use rmcp::{
     ServiceExt,
     transport::{stdio, streamable_http_server::StreamableHttpService},
 };
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tower_http::cors::{Any, CorsLayer};
 use tracing::Level;
 
+mod api;
+mod llm;
 mod mcp;
 mod transcriber;
 mod utils;
 
+use api::AppState;
 use mcp::VideoTranscriberServer;
+use transcriber::TranscriberEngine;
 
 /// Transport mode for the MCP server
 #[derive(Debug, Clone, ValueEnum)]
@@ -84,34 +91,40 @@ async fn run_http_transport(host: &str, port: u16) -> Result<()> {
 
     tracing::info!("Starting Streamable HTTP transport on {}:{}...", host, port);
 
-    // Create the Streamable HTTP service
-    // Each session gets its own VideoTranscriberServer instance
-    let service = StreamableHttpService::new(
+    // MCP service (per-session VideoTranscriberServer)
+    let mcp_service = StreamableHttpService::new(
         || Ok(VideoTranscriberServer::new()),
         LocalSessionManager::default().into(),
         Default::default(),
     );
 
-    // Create axum router with the MCP endpoint
-    let router = axum::Router::new().nest_service("/mcp", service);
+    // REST API state shared across all jobs
+    let app_state = AppState {
+        jobs: api::new_store(),
+        engine: Arc::new(Mutex::new(TranscriberEngine::new())),
+    };
+    let api_router = api::router(app_state);
 
-    // Bind and serve
+    // Permissive CORS for local dev — clients are typically browser-based.
+    // Tighten in production deployments.
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
+    let router = axum::Router::new()
+        .nest("/api", api_router)
+        .nest_service("/mcp", mcp_service)
+        .layer(cors);
+
     let addr = format!("{}:{}", host, port);
     let tcp_listener = tokio::net::TcpListener::bind(&addr).await?;
 
     tracing::info!("=================================================");
-    tracing::info!("MCP Server ready at http://{}/mcp", addr);
+    tracing::info!("Server ready");
+    tracing::info!("  MCP:  http://{}/mcp", addr);
+    tracing::info!("  REST: http://{}/api/jobs", addr);
     tracing::info!("=================================================");
-    tracing::info!("");
-    tracing::info!("Add to your MCP client configuration:");
-    tracing::info!("  {{");
-    tracing::info!("    \"mcpServers\": {{");
-    tracing::info!("      \"video-transcriber-mcp\": {{");
-    tracing::info!("        \"url\": \"http://{}/mcp\"", addr);
-    tracing::info!("      }}");
-    tracing::info!("    }}");
-    tracing::info!("  }}");
-    tracing::info!("");
 
     axum::serve(tcp_listener, router).await?;
 

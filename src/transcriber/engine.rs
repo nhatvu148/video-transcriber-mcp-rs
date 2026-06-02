@@ -47,8 +47,10 @@ impl TranscriberEngine {
             (metadata, audio_path)
         } else {
             info!("🌐 Downloading video from URL");
-            let (metadata, video_path) = self.downloader.download(&options.url).await?;
-            let audio_path = self.audio_processor.extract_audio(&video_path).await?;
+            // yt-dlp already extracts audio to mp3 (-x --audio-format mp3),
+            // so the returned path IS the audio. No need to re-run ffmpeg here;
+            // whisper.rs converts to 16kHz mono PCM in one shot.
+            let (metadata, audio_path) = self.downloader.download(&options.url).await?;
             (metadata, audio_path)
         };
 
@@ -56,9 +58,10 @@ impl TranscriberEngine {
             "🎤 Transcribing audio with Whisper ({:?} model)...",
             options.model
         );
-        let transcript =
-            self.whisper
-                .transcribe(&audio_path, options.model, options.language.as_deref())?;
+        let (transcript, segments) = self
+            .whisper
+            .transcribe(&audio_path, options.model, options.language.as_deref())
+            .await?;
 
         // Save output files
         let files =
@@ -72,13 +75,17 @@ impl TranscriberEngine {
             transcript.clone()
         };
 
-        info!("✅ Transcription complete!");
+        info!(
+            "✅ Transcription complete! ({} segments)",
+            segments.len()
+        );
 
         Ok(TranscriptionResult {
             success: true,
             files,
             metadata,
             transcript,
+            segments,
             transcript_preview,
             word_count,
             model_used: options.model,

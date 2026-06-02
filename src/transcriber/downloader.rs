@@ -2,12 +2,26 @@ use anyhow::{Context, Result};
 use async_process::Command;
 use std::path::PathBuf;
 use tempfile::TempDir;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::types::VideoMetadata;
 
 pub struct VideoDownloader {
     temp_dir: TempDir,
+}
+
+/// If `YT_DLP_COOKIES_FROM_BROWSER` is set in the environment, returns the
+/// `--cookies-from-browser <name>` flag pair to inject into yt-dlp commands.
+/// This lets the downloader piggyback on the user's logged-in browser
+/// session, bypassing YouTube's "Sign in to confirm you're not a bot" wall
+/// and unlocking age-restricted / members-only videos.
+fn cookies_args() -> Option<[String; 2]> {
+    let browser = std::env::var("YT_DLP_COOKIES_FROM_BROWSER").ok()?;
+    let trimmed = browser.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(["--cookies-from-browser".to_string(), trimmed.to_string()])
 }
 
 impl Default for VideoDownloader {
@@ -36,17 +50,28 @@ impl VideoDownloader {
     }
 
     async fn fetch_metadata(&self, url: &str) -> Result<VideoMetadata> {
+        let mut args: Vec<String> = vec!["--dump-json".to_string()];
+        if let Some(c) = cookies_args() {
+            info!("Using --cookies-from-browser {}", c[1]);
+            args.extend(c);
+        }
+        args.push(url.to_string());
+
         let output = Command::new("yt-dlp")
-            .args(["--dump-json", url])
+            .args(&args)
             .output()
             .await
             .context("Failed to run yt-dlp. Is it installed?")?;
 
         if !output.status.success() {
-            anyhow::bail!(
-                "yt-dlp failed to fetch metadata: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // Surface a hint when bot-check fires and cookies aren't configured.
+            if stderr.contains("Sign in to confirm") && cookies_args().is_none() {
+                warn!(
+                    "YouTube triggered bot detection. Set YT_DLP_COOKIES_FROM_BROWSER=chrome (or brave/firefox/edge) in .env to authenticate via your browser cookies."
+                );
+            }
+            anyhow::bail!("yt-dlp failed to fetch metadata: {}", stderr);
         }
 
         let json_str = String::from_utf8(output.stdout)?;
@@ -82,15 +107,20 @@ impl VideoDownloader {
             .path()
             .join(format!("video_{}.mp3", unique_id));
 
+        let mut args: Vec<String> = vec![
+            "-x".to_string(), // Extract audio
+            "--audio-format".to_string(),
+            "mp3".to_string(),
+            "-o".to_string(),
+            output_template.to_string_lossy().to_string(),
+        ];
+        if let Some(c) = cookies_args() {
+            args.extend(c);
+        }
+        args.push(url.to_string());
+
         let output = Command::new("yt-dlp")
-            .args([
-                "-x", // Extract audio
-                "--audio-format",
-                "mp3", // Convert to mp3
-                "-o",
-                output_template.to_str().unwrap(),
-                url,
-            ])
+            .args(&args)
             .output()
             .await
             .context("Failed to run yt-dlp")?;
