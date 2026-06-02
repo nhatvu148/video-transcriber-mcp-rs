@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-06-02
+
+### Added
+
+- **REST API on the HTTP transport** for client-friendly integration:
+  - `POST /api/jobs` — submit a transcription job for any yt-dlp URL or local path
+  - `GET /api/jobs/{id}` — poll job status and read the full result
+  - `POST /api/jobs/upload` — multipart upload of a local audio/video file
+- **LLM summarisation step** (`src/llm.rs`): the REST result includes an AI-generated Markdown summary, a Mermaid diagram, and key takeaways. Calls OpenRouter (`OPENROUTER_API_KEY` required); default model `anthropic/claude-haiku-4-5`, overridable via `LLM_MODEL`.
+- **Whisper segment timestamps** exposed on `JobResult.segments[]` (each with `start_ms`, `end_ms`, `text`) — enables SRT/VTT export downstream.
+- **`REMOTE_WHISPER_URL` env var**: when set, audio bytes are POSTed to a remote HTTP worker (e.g. a serverless GPU) instead of running whisper-rs locally. Endpoint must accept multipart `{audio, model, language}` and return JSON `{transcript, segments[], language, duration_s}`.
+- **`YT_DLP_COOKIES_FROM_BROWSER` env var**: forwards `--cookies-from-browser <name>` to yt-dlp so the downloader piggybacks on your already-signed-in browser session. Unlocks age-restricted / members-only videos and bypasses YouTube's intermittent bot-check wall.
+- **Metal GPU acceleration on macOS** via target-conditional `whisper-rs` feature — `cargo build --release` now uses Metal on Apple Silicon.
+- **`Cargo.lock` is now committed** for reproducible Docker / CI builds.
+- **CORS** layer on the HTTP transport so browser clients (extensions, web apps) can call the REST API directly.
+
+### Changed
+
+- `WhisperTranscriber::transcribe` is now `async`. The local whisper-rs path runs via `tokio::task::spawn_blocking` to avoid stalling the runtime; the remote path is naturally async.
+- Per-P-core thread cap on Apple Silicon (`sysctl hw.perflevel0.physicalcpu`) for faster whisper-rs CPU inference.
+- Removed a redundant ffmpeg re-encode in the URL download path — `yt-dlp` already produces mp3.
+
 ## [0.4.0] - 2026-01-10
 
 ### Added
