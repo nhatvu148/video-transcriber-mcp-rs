@@ -17,7 +17,10 @@ const UPLOAD_MAX_BYTES: usize = 2 * 1024 * 1024 * 1024;
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/jobs", post(handlers::create_job))
-        .route("/jobs/{id}", get(handlers::get_job))
+        .route(
+            "/jobs/{id}",
+            get(handlers::get_job).delete(handlers::cancel_job),
+        )
         .route(
             "/jobs/upload",
             post(handlers::upload_job).layer(DefaultBodyLimit::max(UPLOAD_MAX_BYTES)),

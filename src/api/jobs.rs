@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::transcriber::types::{Segment, VideoMetadata, WhisperModel};
@@ -21,6 +22,7 @@ pub enum JobStatus {
     Summarizing,
     Complete,
     Failed,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -54,6 +56,12 @@ pub struct Job {
     pub result: Option<JobResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Per-job cancellation signal. Cloned into the spawned pipeline task and
+    /// fired by `DELETE /api/jobs/{id}`. Dropping the in-flight futures (Modal
+    /// HTTP request, OpenRouter HTTP request) closes their TCP connections so
+    /// the remote work stops too.
+    #[serde(skip)]
+    pub cancel: CancellationToken,
 }
 
 pub fn parse_model(s: Option<&str>) -> WhisperModel {
