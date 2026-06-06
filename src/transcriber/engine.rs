@@ -70,7 +70,14 @@ impl TranscriberEngine {
         // Calculate stats
         let word_count = transcript.split_whitespace().count();
         let transcript_preview = if transcript.len() > 500 {
-            format!("{}...", &transcript[..500])
+            // Walk back from byte 500 to the nearest char boundary. Languages
+            // with multi-byte UTF-8 sequences (Vietnamese, Chinese, Arabic…)
+            // will land mid-character at a raw byte 500 and panic the slice.
+            let mut end = 500;
+            while !transcript.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}...", &transcript[..end])
         } else {
             transcript.clone()
         };
