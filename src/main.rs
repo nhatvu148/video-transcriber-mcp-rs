@@ -6,6 +6,7 @@ use rmcp::{
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::Level;
 
@@ -112,8 +113,29 @@ async fn run_http_transport(host: &str, port: u16) -> Result<()> {
         .allow_methods(Any)
         .allow_headers(Any);
 
+    // Per-IP rate limit on the /api/* surface. Tuned to accommodate the
+    // web/extension's job-polling pattern (~24 req/min while a job runs)
+    // while blocking abusive bursts. Pairs with Modal + OpenRouter spending
+    // caps for defence-in-depth: this throttles request frequency, the
+    // dashboards cap aggregate cost.
+    //
+    //   - per_second: steady-state allowance
+    //   - burst_size: initial allowance before throttling kicks in
+    //
+    // A misbehaving client hitting POST /api/jobs at full speed gets ~20
+    // requests through immediately, then 1 per second thereafter — bounded
+    // and visible in logs.
+    let governor_conf = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(1)
+            .burst_size(20)
+            .finish()
+            .expect("failed to build rate limit config"),
+    );
+    let governor_layer = GovernorLayer::new(governor_conf);
+
     let router = axum::Router::new()
-        .nest("/api", api_router)
+        .nest("/api", api_router.layer(governor_layer))
         .nest_service("/mcp", mcp_service)
         .layer(cors);
 
