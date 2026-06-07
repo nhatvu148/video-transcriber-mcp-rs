@@ -6,7 +6,9 @@ use rmcp::{
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
+use tower_governor::{
+    GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor,
+};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::Level;
 
@@ -125,10 +127,18 @@ async fn run_http_transport(host: &str, port: u16) -> Result<()> {
     // A misbehaving client hitting POST /api/jobs at full speed gets ~20
     // requests through immediately, then 1 per second thereafter — bounded
     // and visible in logs.
+    // `SmartIpKeyExtractor` reads the standard proxy headers (X-Forwarded-For,
+    // X-Real-IP, Forwarded) and falls back to the connection's peer IP — which
+    // is what we want behind Fly's edge proxy, where the connecting IP is
+    // always Fly's internal loopback. With the default `PeerIpKeyExtractor`
+    // every real-world user would share a single bucket (and the extractor
+    // would also 500 because `axum::serve(...)` doesn't inject `ConnectInfo`
+    // unless we ask).
     let governor_conf = Arc::new(
         GovernorConfigBuilder::default()
             .per_second(1)
             .burst_size(20)
+            .key_extractor(SmartIpKeyExtractor)
             .finish()
             .expect("failed to build rate limit config"),
     );
@@ -148,7 +158,15 @@ async fn run_http_transport(host: &str, port: u16) -> Result<()> {
     tracing::info!("  REST: http://{}/api/jobs", addr);
     tracing::info!("=================================================");
 
-    axum::serve(tcp_listener, router).await?;
+    // `into_make_service_with_connect_info::<SocketAddr>()` is required for
+    // tower_governor's fallback peer-IP extraction (the SmartIp extractor
+    // still wants a peer address if X-Forwarded-For is missing).
+    use std::net::SocketAddr;
+    axum::serve(
+        tcp_listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
