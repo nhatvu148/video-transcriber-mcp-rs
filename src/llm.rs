@@ -65,7 +65,13 @@ Hard rules:
 - `mermaid_src` must contain ONLY the diagram code (no ```mermaid fences, no surrounding text).
 - `mermaid_src` must be syntactically valid Mermaid — no stray characters, no half-closed brackets.
 - `summary_md` is free-form Markdown but must NOT contain a top-level title (the caller adds one).
-- Use ASCII-safe node IDs in the diagram (alphanumeric + underscore); put any natural-language labels in the brackets.";
+- Use ASCII-safe node IDs in the diagram (alphanumeric + underscore); put any natural-language labels in the brackets.
+
+Length budget (CRITICAL — exceeding this truncates the response):
+- `summary_md`: aim for 400–900 words. A digestible study note, not a transcript rewrite. Prefer tight bullets over long paragraphs. Reserve headings only for genuinely distinct sections.
+- `mermaid_src`: 8–20 nodes typically. Diagrams with 40+ nodes are unreadable.
+- `key_points`: 3–7 items, each one sentence.
+- TOTAL output must fit in roughly 4,000 words. If the source video is long-form, ruthlessly compress — capture the structure and key insights, not every example.";
 
 pub async fn summarize_and_diagram(
     transcript: &str,
@@ -83,7 +89,11 @@ pub async fn summarize_and_diagram(
 
     let req = ChatRequest {
         model: &model,
-        max_tokens: 8192,
+        // 16384 gives ~12k words of headroom — enough that even a verbose
+        // long-form transcript won't truncate mid-JSON like 8192 sometimes
+        // did. Claude Haiku 4.5 supports much more; this is a defensive
+        // ceiling. Cost impact: ~$0.02 worst-case per call vs ~$0.01 before.
+        max_tokens: 16384,
         messages: vec![
             ChatMessage {
                 role: "system",
