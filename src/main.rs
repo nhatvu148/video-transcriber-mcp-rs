@@ -21,6 +21,7 @@ mod utils;
 use api::AppState;
 use mcp::VideoTranscriberServer;
 use transcriber::TranscriberEngine;
+use video_transcriber_mcp::credits;
 
 /// Transport mode for the MCP server
 #[derive(Debug, Clone, ValueEnum)]
@@ -105,6 +106,7 @@ async fn run_http_transport(host: &str, port: u16) -> Result<()> {
     let app_state = AppState {
         jobs: api::new_store(),
         engine: Arc::new(Mutex::new(TranscriberEngine::new())),
+        credits: credits::new_store(),
     };
     let api_router = api::router(app_state);
 

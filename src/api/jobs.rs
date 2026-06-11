@@ -50,6 +50,14 @@ pub struct Job {
     pub id: Uuid,
     pub status: JobStatus,
     pub url: String,
+    /// Device that owns this job — used to refund the credit on failure /
+    /// cancellation. Not exposed to the client (different devices polling the
+    /// same job_id shouldn't reveal each other's identities). Currently
+    /// unread (the device_id is also threaded through the spawn closure), but
+    /// kept so future admin / debug endpoints can attribute jobs.
+    #[serde(skip)]
+    #[allow(dead_code)]
+    pub device_id: String,
     pub created_at: i64,
     pub updated_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]

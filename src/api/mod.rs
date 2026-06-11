@@ -25,5 +25,6 @@ pub fn router(state: AppState) -> Router {
             "/jobs/upload",
             post(handlers::upload_job).layer(DefaultBodyLimit::max(UPLOAD_MAX_BYTES)),
         )
+        .route("/balance", get(handlers::get_balance))
         .with_state(state)
 }

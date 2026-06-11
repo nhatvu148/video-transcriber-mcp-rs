@@ -1,7 +1,7 @@
 use axum::{
     Json,
     extract::{Multipart, Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -14,6 +14,7 @@ use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::api::jobs::{Job, JobRequest, JobResult, JobStatus, JobStore, parse_model};
+use crate::credits::{self, CreditStore, is_valid_device_id};
 use crate::llm::summarize_and_diagram;
 use crate::transcriber::{TranscriberEngine, TranscriptionOptions};
 use crate::utils::paths::get_default_output_dir;
@@ -22,12 +23,62 @@ use crate::utils::paths::get_default_output_dir;
 pub struct AppState {
     pub jobs: JobStore,
     pub engine: Arc<Mutex<TranscriberEngine>>,
+    pub credits: CreditStore,
+}
+
+const DEVICE_ID_HEADER: &str = "x-device-id";
+
+/// Extract + validate the device id from request headers. Returns the id on
+/// success or an HTTP-ready error tuple on failure.
+fn require_device_id(headers: &HeaderMap) -> Result<String, (StatusCode, Json<Value>)> {
+    let raw = headers
+        .get(DEVICE_ID_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string());
+    let id = match raw {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            return Err(bad_request(
+                "missing required header: X-Device-Id (client must generate and persist a UUID)",
+            ));
+        }
+    };
+    if !is_valid_device_id(&id) {
+        return Err(bad_request(
+            "invalid X-Device-Id: must be alphanumeric + dashes, ≤128 chars",
+        ));
+    }
+    Ok(id)
+}
+
+fn payment_required(balance: i32) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::PAYMENT_REQUIRED,
+        Json(json!({
+            "error": "out of credits",
+            "balance": balance,
+            "checkout_endpoint": "/api/checkout",
+        })),
+    )
 }
 
 pub async fn create_job(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<JobRequest>,
 ) -> (StatusCode, Json<Value>) {
+    let device_id = match require_device_id(&headers) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+
+    // Reserve a credit upfront. Refunded later if the pipeline ends in
+    // Failed or Cancelled. Atomic — concurrent requests can't both pass at
+    // balance=1.
+    if credits::reserve(&state.credits, &device_id).await.is_err() {
+        return payment_required(0);
+    }
+
     let job_id = Uuid::new_v4();
     let now = now_unix();
     let cancel = CancellationToken::new();
@@ -36,6 +87,7 @@ pub async fn create_job(
         id: job_id,
         status: JobStatus::Queued,
         url: req.url.clone(),
+        device_id: device_id.clone(),
         created_at: now,
         updated_at: now,
         result: None,
@@ -52,9 +104,26 @@ pub async fn create_job(
 
     let store = state.jobs.clone();
     let engine = state.engine.clone();
-    tokio::spawn(async move { run_with_cancel(job_id, req, engine, store, cancel).await });
+    let credit_store = state.credits.clone();
+    tokio::spawn(async move {
+        run_with_cancel(job_id, req, engine, store, credit_store, device_id, cancel).await
+    });
 
     (StatusCode::ACCEPTED, Json(json!({ "job_id": job_id })))
+}
+
+/// GET /api/balance — returns the current device's credit balance,
+/// initialising to FREE_TIER_CREDITS for new device ids.
+pub async fn get_balance(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<Value>) {
+    let device_id = match require_device_id(&headers) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    let bal = credits::balance(&state.credits, &device_id).await;
+    (StatusCode::OK, Json(json!({ "balance": bal })))
 }
 
 pub async fn get_job(
@@ -86,8 +155,21 @@ pub async fn cancel_job(
 
 pub async fn upload_job(
     State(state): State<AppState>,
+    headers: HeaderMap,
     mut multipart: Multipart,
 ) -> (StatusCode, Json<Value>) {
+    let device_id = match require_device_id(&headers) {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+
+    // Reserve credit BEFORE accepting the upload — refusing late wastes the
+    // user's upload bandwidth, but we don't want to commit Modal cost before
+    // the gate check. This is the right place.
+    if credits::reserve(&state.credits, &device_id).await.is_err() {
+        return payment_required(0);
+    }
+
     let cancel = CancellationToken::new();
     let mut saved_path: Option<PathBuf> = None;
     let mut original_filename: Option<String> = None;
@@ -173,6 +255,7 @@ pub async fn upload_job(
         id: job_id,
         status: JobStatus::Queued,
         url: url.clone(),
+        device_id: device_id.clone(),
         created_at: now,
         updated_at: now,
         result: None,
@@ -199,7 +282,10 @@ pub async fn upload_job(
     };
     let store = state.jobs.clone();
     let engine = state.engine.clone();
-    tokio::spawn(async move { run_with_cancel(job_id, req, engine, store, cancel).await });
+    let credit_store = state.credits.clone();
+    tokio::spawn(async move {
+        run_with_cancel(job_id, req, engine, store, credit_store, device_id, cancel).await
+    });
 
     (StatusCode::ACCEPTED, Json(json!({ "job_id": job_id })))
 }
@@ -243,15 +329,20 @@ async fn run_with_cancel(
     req: JobRequest,
     engine: Arc<Mutex<TranscriberEngine>>,
     store: JobStore,
+    credit_store: CreditStore,
+    device_id: String,
     cancel: CancellationToken,
 ) {
     tokio::select! {
         _ = cancel.cancelled() => {
             info!("Job {} cancelled by client", job_id);
             mark_cancelled(&store, job_id).await;
+            // Refund the credit we reserved at create_job time.
+            credits::refund(&credit_store, &device_id).await;
         }
-        _ = run_pipeline(job_id, req, engine, store.clone()) => {
-            // run_pipeline already set Complete or Failed on the job.
+        _ = run_pipeline(job_id, req, engine, store.clone(), credit_store.clone(), device_id.clone()) => {
+            // run_pipeline set Complete (kept the reservation) or Failed
+            // (refunded inside).
         }
     }
 }
@@ -261,6 +352,8 @@ async fn run_pipeline(
     req: JobRequest,
     engine: Arc<Mutex<TranscriberEngine>>,
     store: JobStore,
+    credit_store: CreditStore,
+    device_id: String,
 ) {
     let model = parse_model(req.model.as_deref());
     let options = TranscriptionOptions {
@@ -285,6 +378,7 @@ async fn run_pipeline(
         Err(e) => {
             error!("Transcription failed for job {}: {:#}", job_id, e);
             mark_failed(&store, job_id, format!("{:#}", e)).await;
+            credits::refund(&credit_store, &device_id).await;
             return;
         }
     };
@@ -296,6 +390,7 @@ async fn run_pipeline(
         Err(e) => {
             error!("LLM step failed for job {}: {:#}", job_id, e);
             mark_failed(&store, job_id, format!("{:#}", e)).await;
+            credits::refund(&credit_store, &device_id).await;
             return;
         }
     };
