@@ -28,6 +28,15 @@ pub struct AppState {
 
 const DEVICE_ID_HEADER: &str = "x-device-id";
 
+/// Public alias used by the Stripe module so it can share the same
+/// header-validation logic. Keeping the private name preserves the original
+/// API for the rest of this file.
+pub(crate) fn require_device_id_pub(
+    headers: &HeaderMap,
+) -> Result<String, (StatusCode, Json<Value>)> {
+    require_device_id(headers)
+}
+
 /// Extract + validate the device id from request headers. Returns the id on
 /// success or an HTTP-ready error tuple on failure.
 fn require_device_id(headers: &HeaderMap) -> Result<String, (StatusCode, Json<Value>)> {
