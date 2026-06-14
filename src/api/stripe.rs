@@ -313,7 +313,7 @@ fn verify_signature(secret: &[u8], body: &[u8], header: &str) -> bool {
 }
 
 fn decode_hex(s: &str) -> Result<Vec<u8>, ()> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(());
     }
     (0..s.len())

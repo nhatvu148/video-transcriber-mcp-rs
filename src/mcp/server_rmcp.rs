@@ -457,7 +457,7 @@ impl ServerHandler for VideoTranscriberServer {
                 }
 
                 // Sort by modification time (newest first)
-                video_data.sort_by(|a, b| b.2.cmp(&a.2));
+                video_data.sort_by_key(|b| std::cmp::Reverse(b.2));
 
                 // Apply limit if specified
                 let videos_to_show = if let Some(lim) = limit {

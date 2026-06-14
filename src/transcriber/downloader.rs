@@ -10,17 +10,35 @@ pub struct VideoDownloader {
     temp_dir: TempDir,
 }
 
-/// If `YT_DLP_COOKIES_FROM_BROWSER` is set in the environment, returns the
-/// `--cookies-from-browser <name>` flag pair to inject into yt-dlp commands.
-/// This lets the downloader piggyback on the user's logged-in browser
-/// session, bypassing YouTube's "Sign in to confirm you're not a bot" wall
-/// and unlocking age-restricted / members-only videos.
+/// Resolves the cookie source for yt-dlp from the environment, returning the
+/// flag pair to inject into yt-dlp commands.
+///
+/// Resolution order:
+/// 1. `YT_DLP_COOKIES` — path to a Netscape-format cookies file
+///    (`--cookies <file>`). Use this on headless/Linux setups where the
+///    browser cookie DB isn't accessible (e.g. cookies exported via a QR
+///    login flow).
+/// 2. `YT_DLP_COOKIES_FROM_BROWSER` — browser name to read cookies from
+///    (`--cookies-from-browser <name>`), piggybacking on a logged-in session.
+///
+/// Either source bypasses YouTube's "Sign in to confirm you're not a bot"
+/// wall and unlocks age-restricted / members-only videos.
 fn cookies_args() -> Option<[String; 2]> {
-    let browser = std::env::var("YT_DLP_COOKIES_FROM_BROWSER").ok()?;
-    let trimmed = browser.trim();
-    if trimmed.is_empty() {
-        return None;
+    resolve_cookies_args(
+        std::env::var("YT_DLP_COOKIES").ok().as_deref(),
+        std::env::var("YT_DLP_COOKIES_FROM_BROWSER").ok().as_deref(),
+    )
+}
+
+/// Pure resolution of the cookie flag pair, factored out of `cookies_args` so
+/// the precedence rules can be unit-tested without touching process-global env.
+fn resolve_cookies_args(cookies_file: Option<&str>, browser: Option<&str>) -> Option<[String; 2]> {
+    // Prefer an explicit cookies file — works on headless/Linux hosts.
+    if let Some(trimmed) = cookies_file.map(str::trim).filter(|s| !s.is_empty()) {
+        return Some(["--cookies".to_string(), trimmed.to_string()]);
     }
+    // Fall back to reading cookies straight from a local browser.
+    let trimmed = browser.map(str::trim).filter(|s| !s.is_empty())?;
     Some(["--cookies-from-browser".to_string(), trimmed.to_string()])
 }
 
@@ -52,7 +70,7 @@ impl VideoDownloader {
     async fn fetch_metadata(&self, url: &str) -> Result<VideoMetadata> {
         let mut args: Vec<String> = vec!["--dump-json".to_string()];
         if let Some(c) = cookies_args() {
-            info!("Using --cookies-from-browser {}", c[1]);
+            info!("Using {} {}", c[0], c[1]);
             args.extend(c);
         }
         args.push(url.to_string());
@@ -68,7 +86,7 @@ impl VideoDownloader {
             // Surface a hint when bot-check fires and cookies aren't configured.
             if stderr.contains("Sign in to confirm") && cookies_args().is_none() {
                 warn!(
-                    "YouTube triggered bot detection. Set YT_DLP_COOKIES_FROM_BROWSER=chrome (or brave/firefox/edge) in .env to authenticate via your browser cookies."
+                    "YouTube triggered bot detection. Authenticate with cookies: set YT_DLP_COOKIES=/path/to/cookies.txt (a Netscape-format cookies file, e.g. exported via QR login on headless/Linux), or YT_DLP_COOKIES_FROM_BROWSER=chrome (or brave/firefox/edge) in .env."
                 );
             }
             anyhow::bail!("yt-dlp failed to fetch metadata: {}", stderr);
@@ -168,4 +186,34 @@ fn detect_platform(url: &str, json: &serde_json::Value) -> String {
 
     // Fallback to extractor from metadata
     json["extractor"].as_str().unwrap_or("Unknown").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_cookies_args;
+
+    #[test]
+    fn cookies_file_takes_priority_over_browser() {
+        let args = resolve_cookies_args(Some("/path/cookies.txt"), Some("chrome")).unwrap();
+        assert_eq!(args, ["--cookies", "/path/cookies.txt"]);
+    }
+
+    #[test]
+    fn falls_back_to_browser_when_no_file() {
+        let args = resolve_cookies_args(None, Some("firefox")).unwrap();
+        assert_eq!(args, ["--cookies-from-browser", "firefox"]);
+    }
+
+    #[test]
+    fn blank_or_whitespace_values_are_ignored() {
+        // Empty/whitespace file falls through to the browser...
+        let args = resolve_cookies_args(Some("   "), Some("brave")).unwrap();
+        assert_eq!(args, ["--cookies-from-browser", "brave"]);
+        // ...and a trimmed file path is used verbatim.
+        let args = resolve_cookies_args(Some("  /c.txt  "), None).unwrap();
+        assert_eq!(args, ["--cookies", "/c.txt"]);
+        // Nothing set → no cookie flags at all.
+        assert!(resolve_cookies_args(None, None).is_none());
+        assert!(resolve_cookies_args(Some(""), Some("  ")).is_none());
+    }
 }
