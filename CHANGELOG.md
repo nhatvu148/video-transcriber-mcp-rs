@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-06-14
+
+### Added
+
+- **Credits / metering system** (`src/credits.rs`): per-device credit balances gate transcription jobs, with simple JSON-on-volume persistence (path configurable via `CREDITS_DB_PATH`). `GET /api/balance` reports the caller's remaining balance.
+- **Stripe Checkout integration** (`src/api/stripe.rs`, env-gated):
+  - `POST /api/checkout` — create a Stripe Checkout session to top up credits
+  - `POST /api/webhook/stripe` — Stripe webhook that credits a device on successful payment (signature-verified)
+  - Configured via `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `CHECKOUT_SUCCESS_URL`, `CHECKOUT_CANCEL_URL`. Entirely disabled when the keys are unset.
+- **`YT_DLP_COOKIES` env var**: point the downloader at a Netscape-format cookies file (`--cookies <file>`), taking priority over `YT_DLP_COOKIES_FROM_BROWSER`. Enables authentication on headless / Linux hosts that have no local browser cookie database (e.g. cookies exported via a QR-login flow). ([#3](https://github.com/nhatvu148/video-transcriber-mcp-rs/issues/3))
+- **Job cancellation**: `DELETE /api/jobs/{id}` cancels an in-flight transcription job.
+- **Per-IP rate limiting** on the `/api/*` surface via `tower_governor` (steady 1 req/s, burst 20), using `SmartIpKeyExtractor` so it reads the real client IP from proxy headers (`X-Forwarded-For` / `X-Real-IP` / `Forwarded`) behind an edge proxy.
+
+### Fixed
+
+- Panic when slicing the transcript preview at a non-char boundary for multi-byte UTF-8 languages (Vietnamese, Chinese, Arabic, …).
+- LLM summarisation: raised `max_tokens` and added a length budget in the prompt to avoid truncated summaries.
+- Rate-limit key extraction now uses `SmartIpKeyExtractor` + `ConnectInfo`, so every user no longer shares a single bucket behind Fly's edge proxy (and the extractor no longer 500s on a missing peer address).
+
 ## [0.5.0] - 2026-06-02
 
 ### Added
