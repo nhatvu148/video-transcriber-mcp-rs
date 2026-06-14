@@ -374,15 +374,32 @@ The key to building fast software is understanding...
 
 ### Environment Variables
 
+All environment variables are optional. The transcriber works with none of them set; they unlock authentication, remote inference, AI summaries, and the paid HTTP API.
+
+> 💡 The transcript **output directory** is not an env var — pass `output_dir` to the `transcribe_video` tool (defaults to `~/Downloads/video-transcripts`). Output files are named `<video_id>-<title>.{txt,json,md}`.
+
+#### Downloading (yt-dlp cookies)
+
+Needed only for age-restricted / members-only videos or YouTube's "Sign in to confirm you're not a bot" challenge.
+
 ```bash
-# Custom models directory
-export WHISPER_MODELS_DIR=~/.local/share/whisper-models
+# Option 1 (preferred on headless / Linux): a Netscape-format cookies file.
+# Export it however you like — e.g. a QR-login flow — then point at it.
+export YT_DLP_COOKIES=/path/to/cookies.txt
 
-# Custom output directory
-export TRANSCRIPTS_DIR=~/Documents/transcripts
+# Option 2: read cookies straight from a logged-in local browser.
+# One of: chrome, brave, edge, firefox, safari, chromium, opera, vivaldi.
+# Ignored when YT_DLP_COOKIES is set.
+export YT_DLP_COOKIES_FROM_BROWSER=chrome
+```
 
-# Log level
-export RUST_LOG=info  # or debug, warn, error
+#### Remote Whisper (offload transcription)
+
+```bash
+# POST audio to a remote HTTP worker (e.g. a serverless GPU) instead of
+# running whisper-rs locally. Endpoint must accept multipart {audio, model,
+# language} and return JSON {transcript, segments[], language, duration_s}.
+export REMOTE_WHISPER_URL=https://your-worker.example.com/transcribe
 ```
 
 ## 🧪 Development
