@@ -1,8 +1,15 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::transcriber::types::VideoMetadata;
+
+/// LLM JSON parsing is non-deterministic — Claude Haiku occasionally emits
+/// a response that *almost* fits the schema but has a stray escape, missing
+/// quote, or trailing comma. Single attempts fail ~1-2% of the time on long
+/// transcripts; retrying with a fresh sampling pass almost always succeeds.
+/// We retry up to MAX_LLM_ATTEMPTS-1 times before propagating the error.
+const MAX_LLM_ATTEMPTS: usize = 3;
 
 const OPENROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL: &str = "anthropic/claude-haiku-4-5";
@@ -87,8 +94,57 @@ pub async fn summarize_and_diagram(
         metadata.title, metadata.channel, metadata.platform, metadata.duration, transcript
     );
 
+    // Retry loop: malformed-JSON responses come back ~1-2% of the time on
+    // long transcripts. A fresh sampling pass (different RNG seed inside the
+    // model) almost always returns valid JSON on the next attempt. Network
+    // and API errors are NOT retried — only JSON parse errors, where retry
+    // is meaningful.
+    let mut last_parse_err: Option<anyhow::Error> = None;
+    for attempt in 1..=MAX_LLM_ATTEMPTS {
+        match call_llm_once(&api_key, &model, &user_msg, transcript.len()).await {
+            Ok(result) => {
+                if attempt > 1 {
+                    info!("LLM call succeeded on attempt {} of {}", attempt, MAX_LLM_ATTEMPTS);
+                }
+                return Ok(result);
+            }
+            Err(LlmError::ParseError(e)) if attempt < MAX_LLM_ATTEMPTS => {
+                warn!(
+                    "LLM attempt {}/{} returned malformed JSON; retrying. ({})",
+                    attempt, MAX_LLM_ATTEMPTS, e
+                );
+                last_parse_err = Some(e);
+                continue;
+            }
+            Err(LlmError::ParseError(e)) => {
+                // Last attempt's parse failure — propagate
+                return Err(e);
+            }
+            Err(LlmError::Other(e)) => {
+                // Network / API / auth error — not worth retrying
+                return Err(e);
+            }
+        }
+    }
+    Err(last_parse_err
+        .unwrap_or_else(|| anyhow::anyhow!("LLM exhausted retries with no recorded error")))
+}
+
+/// Inner attempt — returns a typed error so the outer loop can distinguish
+/// "JSON parse failure (retry me)" from "everything else (don't retry)".
+enum LlmError {
+    ParseError(anyhow::Error),
+    Other(anyhow::Error),
+}
+
+async fn call_llm_once(
+    api_key: &str,
+    model: &str,
+    user_msg: &str,
+    transcript_len: usize,
+) -> std::result::Result<LlmResult, LlmError> {
     let req = ChatRequest {
-        model: &model,
+        model,
         // 16384 gives ~12k words of headroom — enough that even a verbose
         // long-form transcript won't truncate mid-JSON like 8192 sometimes
         // did. Claude Haiku 4.5 supports much more; this is a defensive
@@ -101,15 +157,14 @@ pub async fn summarize_and_diagram(
             },
             ChatMessage {
                 role: "user",
-                content: &user_msg,
+                content: user_msg,
             },
         ],
     };
 
     info!(
         "Calling OpenRouter ({} chars transcript, model={})",
-        transcript.len(),
-        model
+        transcript_len, model
     );
 
     let client = reqwest::Client::new();
@@ -123,22 +178,32 @@ pub async fn summarize_and_diagram(
         .json(&req)
         .send()
         .await
-        .context("OpenRouter request failed")?;
+        .context("OpenRouter request failed")
+        .map_err(LlmError::Other)?;
 
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("OpenRouter returned {}: {}", status, body);
+        return Err(LlmError::Other(anyhow::anyhow!(
+            "OpenRouter returned {}: {}",
+            status,
+            body
+        )));
     }
 
     let api_resp: ChatResponse = resp
         .json()
         .await
-        .context("Failed to parse OpenRouter response")?;
+        .context("Failed to parse OpenRouter response")
+        .map_err(LlmError::Other)?;
 
     // OpenRouter sometimes returns 200 with an error body (e.g. credits exhausted).
     if let Some(err) = api_resp.error {
-        anyhow::bail!("OpenRouter error: {} ({:?})", err.message, err.code);
+        return Err(LlmError::Other(anyhow::anyhow!(
+            "OpenRouter error: {} ({:?})",
+            err.message,
+            err.code
+        )));
     }
 
     let raw_text = api_resp
@@ -146,16 +211,19 @@ pub async fn summarize_and_diagram(
         .into_iter()
         .next()
         .map(|c| c.message.content)
-        .context("OpenRouter response had no choices")?;
+        .context("OpenRouter response had no choices")
+        .map_err(LlmError::Other)?;
 
     let json_str = strip_code_fences(raw_text.trim());
 
-    let result: LlmResult = serde_json::from_str(json_str).with_context(|| {
-        format!(
-            "Failed to parse LLM JSON output. Raw response was:\n{}",
-            raw_text
-        )
-    })?;
+    let result: LlmResult = serde_json::from_str(json_str)
+        .with_context(|| {
+            format!(
+                "Failed to parse LLM JSON output. Raw response was:\n{}",
+                raw_text
+            )
+        })
+        .map_err(LlmError::ParseError)?;
 
     info!(
         "LLM call complete: {} key points, {} char summary, {} char mermaid",
