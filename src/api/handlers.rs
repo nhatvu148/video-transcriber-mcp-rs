@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -181,6 +182,12 @@ pub async fn upload_job(
 
     let cancel = CancellationToken::new();
     let mut saved_path: Option<PathBuf> = None;
+    // RAII guard around the upload's tempdir. When this is dropped — at the
+    // end of the spawned pipeline task — the tempdir + file are wiped. This
+    // is what prevents `/tmp/transcriber-upload-*` from accumulating across
+    // jobs. Held in the outer scope so the early-exit error paths drop it
+    // promptly too.
+    let mut saved_tempdir: Option<TempDir> = None;
     let mut original_filename: Option<String> = None;
     let mut model_str: Option<String> = None;
     let mut language: Option<String> = None;
@@ -205,17 +212,19 @@ pub async fn upload_job(
                     .to_string();
                 let safe_name = sanitize_filename(&raw_name);
 
-                // /tmp/transcriber-uploads/<uuid>/<original-filename>
-                // The uuid-scoped directory avoids collisions; keeping the
-                // original filename inside gives the engine a clean
-                // file_stem to use as the transcript title.
-                let dir = std::env::temp_dir()
-                    .join("transcriber-uploads")
-                    .join(Uuid::new_v4().to_string());
-                if let Err(e) = tokio::fs::create_dir_all(&dir).await {
-                    return server_error(&format!("mkdir failed: {}", e));
-                }
-                let path = dir.join(&safe_name);
+                // Use a tempfile::TempDir so the directory + file are wiped
+                // automatically when the spawned pipeline task ends. Prefix
+                // is intentional (the boot-time sweep in main.rs looks for
+                // `transcriber-upload-*` to clean up stragglers from
+                // SIGKILL'd previous processes).
+                let tempdir = match tempfile::Builder::new()
+                    .prefix("transcriber-upload-")
+                    .tempdir()
+                {
+                    Ok(t) => t,
+                    Err(e) => return server_error(&format!("tempdir: {}", e)),
+                };
+                let path = tempdir.path().join(&safe_name);
 
                 let mut file = match tokio::fs::File::create(&path).await {
                     Ok(f) => f,
@@ -242,6 +251,7 @@ pub async fn upload_job(
 
                 original_filename = Some(raw_name);
                 saved_path = Some(path);
+                saved_tempdir = Some(tempdir);
             }
             "model" => model_str = field.text().await.ok(),
             "language" => language = field.text().await.ok(),
@@ -292,7 +302,13 @@ pub async fn upload_job(
     let store = state.jobs.clone();
     let engine = state.engine.clone();
     let credit_store = state.credits.clone();
+    // Move `saved_tempdir` into the spawned task. The TempDir's Drop runs
+    // when the task ends (success, failure, panic, cancellation) — at which
+    // point the uploaded file and its parent directory are removed from
+    // /tmp. Without the move, the TempDir would drop here at the end of
+    // `upload_job`, deleting the file before the pipeline reads it.
     tokio::spawn(async move {
+        let _upload_guard = saved_tempdir;
         run_with_cancel(job_id, req, engine, store, credit_store, device_id, cancel).await
     });
 

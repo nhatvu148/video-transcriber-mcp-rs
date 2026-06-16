@@ -89,9 +89,51 @@ async fn run_stdio_transport() -> Result<()> {
     Ok(())
 }
 
+/// Sweep any `transcriber-upload-*` directories left behind by a previous
+/// process (SIGKILL, OOM, machine replacement, etc.). The normal case is
+/// handled by `TempDir`'s Drop in the upload handler — this is the
+/// belt-and-braces backstop. Runs once at HTTP-transport startup; only
+/// matters when `/api/jobs/upload` is reachable.
+fn sweep_stale_uploads() {
+    let temp = std::env::temp_dir();
+    let entries = match std::fs::read_dir(&temp) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let mut count = 0;
+    let mut bytes = 0u64;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if !name_str.starts_with("transcriber-upload-") {
+            continue;
+        }
+        // Best-effort size measurement for the log line. If we can't read it,
+        // just skip the size — the cleanup is what matters.
+        if let Ok(meta) = entry.metadata() {
+            bytes = bytes.saturating_add(meta.len());
+        }
+        if std::fs::remove_dir_all(entry.path()).is_ok() {
+            count += 1;
+        }
+    }
+    if count > 0 {
+        tracing::info!(
+            "Cleaned up {} stale upload dir(s) (~{} MB) from a previous process",
+            count,
+            bytes / 1024 / 1024
+        );
+    }
+}
+
 /// Run the MCP server with Streamable HTTP transport (for remote access)
 async fn run_http_transport(host: &str, port: u16) -> Result<()> {
     use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+
+    // Run once at startup. New uploads land in tempfile-managed dirs whose
+    // Drop cleans them up automatically; this sweep covers prior processes
+    // that died without unwinding.
+    sweep_stale_uploads();
 
     tracing::info!("Starting Streamable HTTP transport on {}:{}...", host, port);
 
