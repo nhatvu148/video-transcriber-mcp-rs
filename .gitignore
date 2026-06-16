@@ -25,6 +25,10 @@ models/
 # Output
 transcripts/
 
+# Local credits ledger (engine writes here when CREDITS_DB_PATH is unset —
+# happens during `cargo run` for dev. In prod, Fly sets the path to a volume).
+credits.json
+
 # Secrets — never commit
 .env
 .env.local

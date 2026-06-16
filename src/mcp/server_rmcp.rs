@@ -33,29 +33,35 @@ impl VideoTranscriberServer {
 
 impl ServerHandler for VideoTranscriberServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            instructions: Some(
-                "High-performance video transcription server using whisper.cpp.\n\
-                 Transcribes videos from 1000+ platforms or local files - 6x faster than Python whisper!"
-                    .into(),
-            ),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..Default::default()
-        }
+        // rmcp 1.x marks InitializeResult as #[non_exhaustive], so the
+        // `ServerInfo { instructions, capabilities, ..Default::default() }`
+        // struct expression no longer compiles. Mutate a default instance
+        // instead — same behaviour, allowed by the non_exhaustive rules.
+        let mut info = ServerInfo::default();
+        info.instructions = Some(
+            "High-performance video transcription server using whisper.cpp.\n\
+             Transcribes videos from 1000+ platforms or local files - 6x faster than Python whisper!"
+                .into(),
+        );
+        info.capabilities = ServerCapabilities::builder().enable_tools().build();
+        info
     }
 
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         Ok(ListToolsResult {
             tools: vec![
-                Tool {
-                    name: "transcribe_video".into(),
-                    title: None,
-                    description: Some("Transcribe videos from 1000+ platforms (YouTube, Vimeo, TikTok, Twitter, etc.) or local video files using whisper.cpp (4-10x faster than Python whisper!). Downloads/extracts audio and generates transcript in TXT, JSON, and Markdown formats.".into()),
-                    input_schema: Arc::new(
+                // rmcp 1.x marked Tool as #[non_exhaustive], so we construct
+                // via Tool::new(name, description, input_schema) instead of a
+                // struct expression. Cleaner anyway — drops a lot of
+                // `..: None` boilerplate per tool.
+                Tool::new(
+                    "transcribe_video",
+                    "Transcribe videos from 1000+ platforms (YouTube, Vimeo, TikTok, Twitter, etc.) or local video files using whisper.cpp (4-10x faster than Python whisper!). Downloads/extracts audio and generates transcript in TXT, JSON, and Markdown formats.",
+                    Arc::new(
                         serde_json::from_value(json!({
                             "type": "object",
                             "properties": {
@@ -81,48 +87,33 @@ impl ServerHandler for VideoTranscriberServer {
                         }))
                         .unwrap(),
                     ),
-                    output_schema: None,
-                    annotations: None,
-                    icons: None,
-                    meta: None,
-                },
-                Tool {
-                    name: "check_dependencies".into(),
-                    title: None,
-                    description: Some("Check if all required dependencies (yt-dlp, ffmpeg, whisper models) are installed".into()),
-                    input_schema: Arc::new(
+                ),
+                Tool::new(
+                    "check_dependencies",
+                    "Check if all required dependencies (yt-dlp, ffmpeg, whisper models) are installed",
+                    Arc::new(
                         serde_json::from_value(json!({
                             "type": "object",
                             "properties": {}
                         }))
                         .unwrap(),
                     ),
-                    output_schema: None,
-                    annotations: None,
-                    icons: None,
-                    meta: None,
-                },
-                Tool {
-                    name: "list_supported_sites".into(),
-                    title: None,
-                    description: Some("List all video platforms supported by yt-dlp (1000+ sites including YouTube, Vimeo, TikTok, Twitter, Facebook, Instagram, educational platforms, and more)".into()),
-                    input_schema: Arc::new(
+                ),
+                Tool::new(
+                    "list_supported_sites",
+                    "List all video platforms supported by yt-dlp (1000+ sites including YouTube, Vimeo, TikTok, Twitter, Facebook, Instagram, educational platforms, and more)",
+                    Arc::new(
                         serde_json::from_value(json!({
                             "type": "object",
                             "properties": {}
                         }))
                         .unwrap(),
                     ),
-                    output_schema: None,
-                    annotations: None,
-                    icons: None,
-                    meta: None,
-                },
-                Tool {
-                    name: "list_transcripts".into(),
-                    title: None,
-                    description: Some("List all available transcripts in the output directory, sorted by modification time (newest first)".into()),
-                    input_schema: Arc::new(
+                ),
+                Tool::new(
+                    "list_transcripts",
+                    "List all available transcripts in the output directory, sorted by modification time (newest first)",
+                    Arc::new(
                         serde_json::from_value(json!({
                             "type": "object",
                             "properties": {
@@ -138,16 +129,11 @@ impl ServerHandler for VideoTranscriberServer {
                         }))
                         .unwrap(),
                     ),
-                    output_schema: None,
-                    annotations: None,
-                    icons: None,
-                    meta: None,
-                },
-                Tool {
-                    name: "get_latest_transcript".into(),
-                    title: None,
-                    description: Some("Get the path and details of the most recently created/modified transcript. Useful to avoid accidentally reading old transcripts.".into()),
-                    input_schema: Arc::new(
+                ),
+                Tool::new(
+                    "get_latest_transcript",
+                    "Get the path and details of the most recently created/modified transcript. Useful to avoid accidentally reading old transcripts.",
+                    Arc::new(
                         serde_json::from_value(json!({
                             "type": "object",
                             "properties": {
@@ -159,16 +145,11 @@ impl ServerHandler for VideoTranscriberServer {
                         }))
                         .unwrap(),
                     ),
-                    output_schema: None,
-                    annotations: None,
-                    icons: None,
-                    meta: None,
-                },
-                Tool {
-                    name: "delete_transcript".into(),
-                    title: None,
-                    description: Some("Delete a specific transcript by video ID. This removes all associated files (txt, json, md).".into()),
-                    input_schema: Arc::new(
+                ),
+                Tool::new(
+                    "delete_transcript",
+                    "Delete a specific transcript by video ID. This removes all associated files (txt, json, md).",
+                    Arc::new(
                         serde_json::from_value(json!({
                             "type": "object",
                             "properties": {
@@ -185,16 +166,11 @@ impl ServerHandler for VideoTranscriberServer {
                         }))
                         .unwrap(),
                     ),
-                    output_schema: None,
-                    annotations: None,
-                    icons: None,
-                    meta: None,
-                },
-                Tool {
-                    name: "cleanup_old_transcripts".into(),
-                    title: None,
-                    description: Some("Delete transcripts older than a specified number of days. Helps manage disk space.".into()),
-                    input_schema: Arc::new(
+                ),
+                Tool::new(
+                    "cleanup_old_transcripts",
+                    "Delete transcripts older than a specified number of days. Helps manage disk space.",
+                    Arc::new(
                         serde_json::from_value(json!({
                             "type": "object",
                             "properties": {
@@ -211,16 +187,11 @@ impl ServerHandler for VideoTranscriberServer {
                         }))
                         .unwrap(),
                     ),
-                    output_schema: None,
-                    annotations: None,
-                    icons: None,
-                    meta: None,
-                },
-                Tool {
-                    name: "delete_all_transcripts".into(),
-                    title: None,
-                    description: Some("Delete ALL transcripts in the output directory. Use with caution - this cannot be undone!".into()),
-                    input_schema: Arc::new(
+                ),
+                Tool::new(
+                    "delete_all_transcripts",
+                    "Delete ALL transcripts in the output directory. Use with caution - this cannot be undone!",
+                    Arc::new(
                         serde_json::from_value(json!({
                             "type": "object",
                             "properties": {
@@ -237,11 +208,7 @@ impl ServerHandler for VideoTranscriberServer {
                         }))
                         .unwrap(),
                     ),
-                    output_schema: None,
-                    annotations: None,
-                    icons: None,
-                    meta: None,
-                },
+                ),
             ],
             next_cursor: None,
             meta: None,
@@ -250,7 +217,7 @@ impl ServerHandler for VideoTranscriberServer {
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         match request.name.as_ref() {
