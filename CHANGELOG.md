@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-06-15
+
+### Changed
+
+- **`rmcp` 0.12 → 1.7** — the official MCP Rust SDK reached its first stable major. The MCP protocol wire format is unchanged (existing Claude Code / Claude Desktop clients connect seamlessly), but the construction API for `Tool` and `ServerInfo` did move behind `#[non_exhaustive]`:
+  - `Tool { name, description, input_schema, … }` struct expressions → `Tool::new(name, description, input_schema)` builder. Drops a lot of boilerplate per tool.
+  - `ServerInfo { …, ..Default::default() }` → mutate a `ServerInfo::default()` instance.
+  - `PaginatedRequestParam` and `CallToolRequestParam` are now plural (`…Params`); the old type aliases are deprecated.
+- **`reqwest` 0.12 → 0.13** — `rustls-tls` feature flag renamed to `rustls`; `form` is no longer enabled by default (added explicitly).
+- **`whisper-rs` 0.15 → 0.16**, **`tower-http` 0.6 → 0.7** — no source-side breakage.
+- Assorted patch bumps: `axum` → 0.8.9, `tokio` → 1.52, `tempfile` → 3.27, `tower` → 0.5.3, `uuid` → 1.23.
+
 ## [0.6.0] - 2026-06-14
 
 ### Added
@@ -211,6 +223,9 @@ This release marks the first production-ready version of video-transcriber-mcp!
 
 Initial development version with manual JSON-RPC implementation.
 
+[0.7.0]: https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/tag/v0.7.0
+[0.6.0]: https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/tag/v0.6.0
+[0.5.0]: https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/tag/v0.5.0
 [0.4.0]: https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/tag/v0.4.0
 [0.3.0]: https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/tag/v0.3.0
 [0.2.0]: https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/tag/v0.2.0
