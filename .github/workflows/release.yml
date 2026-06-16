@@ -108,11 +108,36 @@ jobs:
           find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} release-assets/ \;
           ls -lh release-assets/
 
+      # Pull only the section for THIS tag out of CHANGELOG.md so the
+      # GitHub release body isn't the whole file. Strips the `v` prefix
+      # from the tag (e.g. `v0.7.0` → `0.7.0`) and matches the
+      # `## [0.7.0]` heading, copying lines until the next `## [` heading.
+      - name: Extract changelog section
+        id: changelog
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "Extracting section for v${VERSION}"
+          # Substitute VERSION directly into the awk script body so the
+          # bracket-anchored regex composes correctly. (Using `-v marker=`
+          # turns out to mangle the escape sequences.)
+          awk "/^## \\[${VERSION}\\]/ { capture=1; next } capture && /^## \\[/ { exit } capture" \
+            CHANGELOG.md > release-notes.md
+          # Strip leading + trailing blank lines for tidy rendering
+          awk 'NF { p=1 } p' release-notes.md | awk 'BEGIN{RS=""; ORS="\n\n"} 1' > /tmp/rn && mv /tmp/rn release-notes.md
+          # Fallback if no matching section was found
+          if [ ! -s release-notes.md ]; then
+            printf 'See [CHANGELOG.md](https://github.com/%s/blob/main/CHANGELOG.md) for release notes.\n' \
+              "${GITHUB_REPOSITORY}" > release-notes.md
+          fi
+          echo "--- release-notes.md ---"
+          cat release-notes.md
+          echo "--- end ---"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: release-assets/*
-          body_path: CHANGELOG.md
+          body_path: release-notes.md
           draft: false
           prerelease: false
         env:
