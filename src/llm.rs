@@ -82,9 +82,13 @@ Diagram quality (when generating a `flowchart`):
   {label}      decision / open question
   [/label/]    input / data source
   [label]      default / generic node
-- Highlight the 1-3 MOST important nodes by appending the following AT THE END of the diagram (after all node and edge declarations):
-    classDef key fill:#7C3AED,stroke:#5B21B6,color:#fff,stroke-width:2px;
-    class NodeA,NodeB key;
+- Highlight the 1-3 MOST important nodes by appending EXACTLY two lines at the end of the diagram (after all node and edge declarations). Format:
+    classDef key fill:#7C3AED,stroke:#5B21B6,color:#fff,stroke-width:2px
+    class NodeA,NodeB key
+  Strict syntax rules — getting these wrong breaks the diagram parser:
+  * No semicolons at the end of either line.
+  * The `class` line MUST end with the class name token (`key`). Omitting it (e.g. `class NodeA,NodeB`) is a parse error.
+  * Use the exact word `key` as the class name — don't rename it.
   Use this sparingly — if everything is highlighted, nothing stands out.
 - Add edge labels (`A -->|how A leads to B| B`) where the connection isn't obvious from the node names alone.
 
