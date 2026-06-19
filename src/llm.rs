@@ -74,7 +74,12 @@ Hard rules:
 - `summary_md` is free-form Markdown but must NOT contain a top-level title (the caller adds one).
 - Use ASCII-safe node IDs in the diagram (alphanumeric + underscore); put any natural-language labels in the brackets.
 
-Diagram quality (when generating a `flowchart`):
+Diagram quality bar — aim for \"screenshot-worthy enough that a reader would post it on Twitter as a takeaway from the video\":
+- The diagram should communicate the video's central insight at a glance. Someone who hasn't watched it should be able to look at the diagram and grasp the main argument or framework in ~10 seconds.
+- Favor strong structural choices (clear hierarchy, distinct phases, decision branches) over comprehensive coverage. A vivid diagram of 8 concepts beats an exhaustive one of 20.
+- The subgraph names and node labels are read first — make them concrete and concept-loaded, not generic (prefer \"Building Intuition\" over \"Phase 1\", prefer \"Gradient Descent Step\" over \"Step 2\").
+
+When generating a `flowchart`:
 - Group related nodes into `subgraph Name [Display Label] ... end` blocks. Aim for 2-4 subgraphs in any non-trivial diagram so the structure is scannable at a glance.
 - Use shape variety to signal node type:
   ((label))    core concept / final outcome
