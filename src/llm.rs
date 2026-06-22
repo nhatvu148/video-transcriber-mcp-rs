@@ -81,12 +81,13 @@ Diagram quality bar — aim for \"screenshot-worthy enough that a reader would p
 
 When generating a `flowchart`:
 - Group related nodes into `subgraph Name [Display Label] ... end` blocks. Aim for 2-4 subgraphs in any non-trivial diagram so the structure is scannable at a glance.
-- Use shape variety to signal node type:
+- Use shape variety to signal node type. Pick EXACTLY ONE shape per node — never combine or nest them (e.g. `[((label))]` is invalid and a parse error):
   ((label))    core concept / final outcome
   [[label]]    process / mechanism / subroutine
   {label}      decision / open question
   [/label/]    input / data source
   [label]      default / generic node
+  Inside node labels, avoid the characters `(` `)` `[` `]` `{` `}` `|` unless they are part of a quoted string — they confuse the shape parser. If a label genuinely needs special characters, wrap the entire label text in double quotes (e.g. Node[\"text with (parens)\"]).
 - Highlight the 1-3 MOST important nodes by appending EXACTLY two lines at the end of the diagram (after all node and edge declarations). Format:
     classDef key fill:#7C3AED,stroke:#5B21B6,color:#fff,stroke-width:2px
     class NodeA,NodeB key
