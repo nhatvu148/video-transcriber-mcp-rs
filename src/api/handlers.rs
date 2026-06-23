@@ -56,13 +56,14 @@ pub async fn get_me(AuthUser(claims): AuthUser) -> (StatusCode, Json<Value>) {
 
 const DEVICE_ID_HEADER: &str = "x-device-id";
 
-/// Public alias used by the Stripe module so it can share the same
-/// header-validation logic. Keeping the private name preserves the original
-/// API for the rest of this file.
-pub(crate) fn require_device_id_pub(
+/// Public wrapper so the Stripe checkout handler resolves the same identity
+/// (authenticated account preferred, else device id) as the job handlers —
+/// ensuring a purchase credits the account a signed-in user is actually using.
+pub(crate) async fn resolve_identity_pub(
+    state: &AppState,
     headers: &HeaderMap,
 ) -> Result<String, (StatusCode, Json<Value>)> {
-    require_device_id(headers)
+    resolve_identity(state, headers).await
 }
 
 /// Extract + validate the device id from request headers. Returns the id on
@@ -88,6 +89,47 @@ fn require_device_id(headers: &HeaderMap) -> Result<String, (StatusCode, Json<Va
     Ok(id)
 }
 
+/// Resolve the ledger identity for a request, preferring the authenticated
+/// account over the legacy device id.
+///
+/// - **Valid `Authorization: Bearer …`** → `user:<sub>` account key. This is
+///   the path the signed-in web app takes.
+/// - **Authorization present but invalid/expired** → 401. We never silently
+///   downgrade to the device path when a token was supplied — that would let a
+///   client paper over a broken session and quietly spend device credits.
+/// - **No Authorization header** → legacy `X-Device-Id` path (the extension
+///   and any pre-auth client). Returns 400 if the device header is missing.
+///
+/// This dual path is what lets the web (authed) and extension (not yet authed)
+/// share one backend during the auth rollout.
+async fn resolve_identity(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<String, (StatusCode, Json<Value>)> {
+    if let Some(auth_value) = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    {
+        let token = crate::auth::extract_bearer_token(auth_value).ok_or_else(|| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "malformed Authorization header" })),
+            )
+        })?;
+        return match crate::auth::verify_jwt(token, &state.jwks).await {
+            Ok(claims) => Ok(credits::account_key(&claims.sub)),
+            Err(e) => {
+                tracing::debug!("auth token rejected: {:#}", e);
+                Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({ "error": "invalid or expired token" })),
+                ))
+            }
+        };
+    }
+    require_device_id(headers)
+}
+
 fn payment_required(balance: i32) -> (StatusCode, Json<Value>) {
     (
         StatusCode::PAYMENT_REQUIRED,
@@ -104,7 +146,7 @@ pub async fn create_job(
     headers: HeaderMap,
     Json(req): Json<JobRequest>,
 ) -> (StatusCode, Json<Value>) {
-    let device_id = match require_device_id(&headers) {
+    let device_id = match resolve_identity(&state, &headers).await {
         Ok(id) => id,
         Err(e) => return e,
     };
@@ -149,18 +191,57 @@ pub async fn create_job(
     (StatusCode::ACCEPTED, Json(json!({ "job_id": job_id })))
 }
 
-/// GET /api/balance — returns the current device's credit balance,
-/// initialising to FREE_TIER_CREDITS for new device ids.
+/// GET /api/balance — returns the caller's credit balance. Uses the
+/// authenticated account when signed in, else the legacy device id.
+/// Initialises to FREE_TIER_CREDITS for never-before-seen identities.
 pub async fn get_balance(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> (StatusCode, Json<Value>) {
-    let device_id = match require_device_id(&headers) {
+    let id = match resolve_identity(&state, &headers).await {
         Ok(id) => id,
         Err(e) => return e,
     };
-    let bal = credits::balance(&state.credits, &device_id).await;
+    let bal = credits::balance(&state.credits, &id).await;
     (StatusCode::OK, Json(json!({ "balance": bal })))
+}
+
+/// POST /api/auth/claim — one-time account bootstrap on first sign-in.
+///
+/// Requires a valid JWT (via the `AuthUser` extractor). The client optionally
+/// passes its legacy `X-Device-Id` so we can migrate any anonymous balance
+/// into the freshly-signed-in account. Returns the resulting balance plus a
+/// human-readable note about what happened (migrated vs seeded).
+pub async fn claim_account(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AuthUser(claims): AuthUser,
+) -> (StatusCode, Json<Value>) {
+    // Device id is optional here — a brand-new user on a fresh browser won't
+    // have one, and that's fine (they just get the free tier).
+    let device_id = headers
+        .get(DEVICE_ID_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && is_valid_device_id(s));
+
+    let outcome = credits::claim_account(&state.credits, &claims.sub, device_id).await;
+    let (balance, note) = match outcome {
+        credits::ClaimOutcome::AlreadyClaimed { balance } => {
+            (balance, "already claimed".to_string())
+        }
+        credits::ClaimOutcome::Migrated { from_device, balance } => (
+            balance,
+            format!("migrated {from_device} credits from this device"),
+        ),
+        credits::ClaimOutcome::Seeded { balance } => {
+            (balance, format!("welcome — {balance} free credits to start"))
+        }
+    };
+    (
+        StatusCode::OK,
+        Json(json!({ "balance": balance, "note": note })),
+    )
 }
 
 pub async fn get_job(
@@ -195,7 +276,7 @@ pub async fn upload_job(
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> (StatusCode, Json<Value>) {
-    let device_id = match require_device_id(&headers) {
+    let device_id = match resolve_identity(&state, &headers).await {
         Ok(id) => id,
         Err(e) => return e,
     };

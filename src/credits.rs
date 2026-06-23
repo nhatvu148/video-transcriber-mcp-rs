@@ -1,9 +1,22 @@
-//! Per-device credit ledger.
+//! Credit ledger keyed by an opaque identity string.
 //!
-//! Identity is an opaque `device_id` (UUID generated client-side, stored in
-//! `localStorage` / `chrome.storage.local`). New devices get
-//! `FREE_TIER_CREDITS` on first contact; subsequent credits come from Stripe
-//! Checkout sessions.
+//! ## Identity
+//!
+//! Two kinds of identity key share this ledger:
+//! - **Account keys** (`user:<supabase-uuid>`) — the primary identity since
+//!   the email-auth migration. Granted [`FREE_TIER_CREDITS`] once per account.
+//!   Because creating a Supabase account requires Google/email verification,
+//!   farming free credits across many accounts is no longer cheap — this is
+//!   the abuse-resistant free tier.
+//! - **Device keys** (raw `device_id` UUIDs) — the legacy anonymous identity.
+//!   Still honored for backward compatibility (older clients, the extension
+//!   before it gains auth), and as the *source* of a one-time migration: on a
+//!   user's first sign-in, [`claim_account`] transfers their device balance to
+//!   their account so purchased credits aren't lost.
+//!
+//! The two namespaces never collide because account keys carry the `user:`
+//! prefix while device keys are bare UUIDs. Both are just `String`s in the
+//! same map; the ledger itself is identity-agnostic.
 //!
 //! ## Persistence
 //!
@@ -141,16 +154,95 @@ fn persist(state: &CreditState) {
     }
 }
 
-/// Returns the device's current balance, initialising to [`FREE_TIER_CREDITS`]
-/// if this is the first time we've seen the id. Persists if a new device was
-/// just created.
-pub async fn balance(store: &CreditStore, device_id: &str) -> i32 {
+/// Build the ledger key for an authenticated account from a Supabase user id.
+/// The `user:` prefix namespaces accounts away from legacy device keys.
+pub fn account_key(user_id: &str) -> String {
+    format!("user:{user_id}")
+}
+
+/// Outcome of [`claim_account`], surfaced so the API/UI can tell the user what
+/// happened ("migrated 34 credits" vs "welcome, here are 3 free credits").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimOutcome {
+    /// Account already existed — nothing changed. `balance` is the current value.
+    AlreadyClaimed { balance: i32 },
+    /// Device balance was transferred into a brand-new account.
+    Migrated { from_device: i32, balance: i32 },
+    /// Brand-new account with no device history — seeded with the free tier.
+    Seeded { balance: i32 },
+}
+
+/// One-time account bootstrap, run on a user's first authenticated request.
+///
+/// - If the account already has a ledger entry → no-op (`AlreadyClaimed`).
+/// - Else if `device_key` is provided and that device has a balance → transfer
+///   the whole balance to the account and zero the device (`Migrated`). No free
+///   tier is added on top: an anonymous user who used the app already consumed
+///   their device's free grant, so granting again would let one human double-dip.
+/// - Else → seed the account with [`FREE_TIER_CREDITS`] (`Seeded`).
+///
+/// Idempotent: calling it repeatedly after the first time returns
+/// `AlreadyClaimed` without mutating anything.
+pub async fn claim_account(
+    store: &CreditStore,
+    user_id: &str,
+    device_key: Option<&str>,
+) -> ClaimOutcome {
+    let key = account_key(user_id);
     let mut s = store.lock().await;
-    let was_new = !s.balances.contains_key(device_id);
-    let bal = *s.balances.entry(device_id.to_string()).or_insert_with(|| {
+
+    if let Some(&existing) = s.balances.get(&key) {
+        return ClaimOutcome::AlreadyClaimed { balance: existing };
+    }
+
+    // Account is new. Decide between migrate-from-device and fresh-free-tier.
+    let migrate_amount = device_key
+        .and_then(|d| s.balances.get(d).copied())
+        .filter(|&bal| bal > 0);
+
+    let outcome = if let Some(amount) = migrate_amount {
+        let device = device_key.expect("migrate_amount implies device_key");
+        s.balances.insert(key.clone(), amount);
+        // Zero the device so the credits can't be claimed twice (e.g. a second
+        // account claiming the same device). We keep the key at 0 rather than
+        // removing it so a stale anonymous client doesn't silently re-seed.
+        s.balances.insert(device.to_string(), 0);
         info!(
-            "New device {} — seeded with {} free credits",
-            short_id(device_id),
+            "Claimed account {} — migrated {} credits from device {}",
+            short_id(user_id),
+            amount,
+            short_id(device)
+        );
+        ClaimOutcome::Migrated {
+            from_device: amount,
+            balance: amount,
+        }
+    } else {
+        s.balances.insert(key.clone(), FREE_TIER_CREDITS);
+        info!(
+            "Claimed account {} — seeded with {} free credits",
+            short_id(user_id),
+            FREE_TIER_CREDITS
+        );
+        ClaimOutcome::Seeded {
+            balance: FREE_TIER_CREDITS,
+        }
+    };
+    persist(&s);
+    outcome
+}
+
+/// Returns the identity's current balance. For account keys (`user:…`) the
+/// entry is expected to already exist via [`claim_account`]; if it somehow
+/// doesn't, we seed the free tier as a safety net. For legacy device keys this
+/// preserves the original seed-on-read behavior.
+pub async fn balance(store: &CreditStore, id: &str) -> i32 {
+    let mut s = store.lock().await;
+    let was_new = !s.balances.contains_key(id);
+    let bal = *s.balances.entry(id.to_string()).or_insert_with(|| {
+        info!(
+            "New identity {} — seeded with {} free credits",
+            short_id(id),
             FREE_TIER_CREDITS
         );
         FREE_TIER_CREDITS
@@ -161,17 +253,17 @@ pub async fn balance(store: &CreditStore, device_id: &str) -> i32 {
     bal
 }
 
-/// Atomically decrement a device's balance by 1 and return the new balance.
-/// Returns `Err(())` if balance is already 0 (or somehow negative). Initialises
-/// the device to [`FREE_TIER_CREDITS`] if unseen (so the very first request is
-/// always allowed for a new device).
-pub async fn reserve(store: &CreditStore, device_id: &str) -> Result<i32, ()> {
+/// Atomically decrement an identity's balance by 1 and return the new balance.
+/// Returns `Err(())` if balance is already 0 (or somehow negative). Seeds the
+/// free tier if unseen (so a first request from a never-claimed identity is
+/// still allowed).
+pub async fn reserve(store: &CreditStore, id: &str) -> Result<i32, ()> {
     let mut s = store.lock().await;
     {
-        let bal = s.balances.entry(device_id.to_string()).or_insert_with(|| {
+        let bal = s.balances.entry(id.to_string()).or_insert_with(|| {
             info!(
-                "New device {} — seeded with {} free credits",
-                short_id(device_id),
+                "New identity {} — seeded with {} free credits",
+                short_id(id),
                 FREE_TIER_CREDITS
             );
             FREE_TIER_CREDITS
@@ -181,42 +273,38 @@ pub async fn reserve(store: &CreditStore, device_id: &str) -> Result<i32, ()> {
         }
         *bal -= 1;
         info!(
-            "Reserved 1 credit for device {} — balance now {}",
-            short_id(device_id),
+            "Reserved 1 credit for {} — balance now {}",
+            short_id(id),
             *bal
         );
     }
-    let new = *s.balances.get(device_id).unwrap_or(&0);
+    let new = *s.balances.get(id).unwrap_or(&0);
     persist(&s);
     Ok(new)
 }
 
 /// Refund a reservation. Call when a job ends in `Failed` or `Cancelled`.
-pub async fn refund(store: &CreditStore, device_id: &str) {
+pub async fn refund(store: &CreditStore, id: &str) {
     let mut s = store.lock().await;
     {
-        let bal = s.balances.entry(device_id.to_string()).or_insert(0);
+        let bal = s.balances.entry(id.to_string()).or_insert(0);
         *bal += 1;
-        info!(
-            "Refunded 1 credit to device {} — balance now {}",
-            short_id(device_id),
-            *bal
-        );
+        info!("Refunded 1 credit to {} — balance now {}", short_id(id), *bal);
     }
     persist(&s);
 }
 
-/// Add credits to a device (called by the Stripe webhook on successful
+/// Add credits to an identity (called by the Stripe webhook on successful
 /// `checkout.session.completed`).
-pub async fn add(store: &CreditStore, device_id: &str, amount: i32) -> i32 {
+pub async fn add(store: &CreditStore, id: &str, amount: i32) -> i32 {
     let mut s = store.lock().await;
     let new = {
-        let bal = s.balances.entry(device_id.to_string()).or_insert(0);
+        let bal = s.balances.entry(id.to_string()).or_insert(0);
         *bal += amount;
         info!(
-            "Added {} credits to device {} — balance now {}",
+            "Added {} credits to {} — balance now {}",
             amount,
-            short_id(device_id),
+            short_id(id),
             *bal
         );
         *bal
@@ -238,5 +326,84 @@ fn short_id(s: &str) -> String {
         s.to_string()
     } else {
         format!("{}…", &s[..8])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// Build an in-memory store pointed at a temp file so persist() is a no-op
+    /// we don't care about (writes succeed to /tmp, nothing asserts on them).
+    fn test_store(initial: &[(&str, i32)]) -> CreditStore {
+        let mut balances = HashMap::new();
+        for (k, v) in initial {
+            balances.insert(k.to_string(), *v);
+        }
+        let mut path = std::env::temp_dir();
+        // Unique-ish filename without Date/random (forbidden) — use a counter
+        // via the initial contents length + a fixed prefix. Collisions are
+        // harmless since each test writes its own snapshot.
+        path.push(format!("credits-test-{}.json", balances.len()));
+        Arc::new(Mutex::new(CreditState { balances, path }))
+    }
+
+    #[tokio::test]
+    async fn claim_seeds_free_tier_for_brand_new_account() {
+        let store = test_store(&[]);
+        let outcome = claim_account(&store, "user-uuid-1", None).await;
+        assert_eq!(outcome, ClaimOutcome::Seeded { balance: FREE_TIER_CREDITS });
+        assert_eq!(balance(&store, &account_key("user-uuid-1")).await, FREE_TIER_CREDITS);
+    }
+
+    #[tokio::test]
+    async fn claim_migrates_device_balance() {
+        let store = test_store(&[("device-abc", 34)]);
+        let outcome = claim_account(&store, "user-uuid-2", Some("device-abc")).await;
+        assert_eq!(
+            outcome,
+            ClaimOutcome::Migrated { from_device: 34, balance: 34 }
+        );
+        // Account got the credits...
+        assert_eq!(balance(&store, &account_key("user-uuid-2")).await, 34);
+        // ...and the device was zeroed so it can't be claimed again.
+        assert_eq!(balance(&store, "device-abc").await, 0);
+    }
+
+    #[tokio::test]
+    async fn claim_is_idempotent() {
+        let store = test_store(&[]);
+        let first = claim_account(&store, "user-uuid-3", None).await;
+        assert_eq!(first, ClaimOutcome::Seeded { balance: FREE_TIER_CREDITS });
+        // Second claim with a juicy device balance must NOT stack — account
+        // already exists, so nothing changes.
+        let second = claim_account(&store, "user-uuid-3", Some("device-xyz")).await;
+        assert_eq!(second, ClaimOutcome::AlreadyClaimed { balance: FREE_TIER_CREDITS });
+    }
+
+    #[tokio::test]
+    async fn claim_with_empty_device_seeds_free_tier() {
+        // Device key points at a zero (or missing) balance → no migration.
+        let store = test_store(&[("device-empty", 0)]);
+        let outcome = claim_account(&store, "user-uuid-4", Some("device-empty")).await;
+        assert_eq!(outcome, ClaimOutcome::Seeded { balance: FREE_TIER_CREDITS });
+    }
+
+    #[tokio::test]
+    async fn reserve_and_refund_roundtrip() {
+        let store = test_store(&[]);
+        claim_account(&store, "user-uuid-5", None).await;
+        let key = account_key("user-uuid-5");
+        let after_reserve = reserve(&store, &key).await.unwrap();
+        assert_eq!(after_reserve, FREE_TIER_CREDITS - 1);
+        refund(&store, &key).await;
+        assert_eq!(balance(&store, &key).await, FREE_TIER_CREDITS);
+    }
+
+    #[tokio::test]
+    async fn reserve_fails_at_zero() {
+        let store = test_store(&[("user:broke", 0)]);
+        assert!(reserve(&store, "user:broke").await.is_err());
     }
 }

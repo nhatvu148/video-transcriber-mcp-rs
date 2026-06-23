@@ -28,6 +28,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/balance", get(handlers::get_balance))
         .route("/me", get(handlers::get_me))
+        .route("/auth/claim", post(handlers::claim_account))
         .route("/checkout", post(stripe::create_checkout))
         .route("/webhook/stripe", post(stripe::webhook))
         .with_state(state)
