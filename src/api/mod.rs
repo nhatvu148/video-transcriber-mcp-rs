@@ -27,6 +27,7 @@ pub fn router(state: AppState) -> Router {
             post(handlers::upload_job).layer(DefaultBodyLimit::max(UPLOAD_MAX_BYTES)),
         )
         .route("/balance", get(handlers::get_balance))
+        .route("/me", get(handlers::get_me))
         .route("/checkout", post(stripe::create_checkout))
         .route("/webhook/stripe", post(stripe::webhook))
         .with_state(state)

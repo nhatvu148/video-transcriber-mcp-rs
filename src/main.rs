@@ -13,6 +13,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::Level;
 
 mod api;
+mod auth;
 mod llm;
 mod mcp;
 mod transcriber;
@@ -144,11 +145,24 @@ async fn run_http_transport(host: &str, port: u16) -> Result<()> {
         Default::default(),
     );
 
+    // Supabase JWKS cache for verifying user auth tokens. Falls back to a
+    // placeholder URL if SUPABASE_URL isn't configured — the cache will
+    // simply fail to fetch and every auth-requiring endpoint will 401,
+    // which is the correct behavior for a misconfigured deployment.
+    let supabase_url = std::env::var("SUPABASE_URL").unwrap_or_else(|_| {
+        tracing::warn!(
+            "SUPABASE_URL is not set — /api/me and other auth-required endpoints will reject all requests"
+        );
+        "https://invalid.supabase.invalid".to_string()
+    });
+    let jwks = auth::JwksCache::new(&supabase_url);
+
     // REST API state shared across all jobs
     let app_state = AppState {
         jobs: api::new_store(),
         engine: Arc::new(Mutex::new(TranscriberEngine::new())),
         credits: credits::new_store(),
+        jwks,
     };
     let api_router = api::router(app_state);
 

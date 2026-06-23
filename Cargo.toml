@@ -30,6 +30,9 @@ tokio = {version = "1.52", features = ["full"]}
 tokio-util = "0.7"
 hmac = "0.12"
 sha2 = "0.10"
+# JWT verification for Supabase Auth — used by the auth middleware to validate
+# tokens from the web/extension before crediting any operation.
+jsonwebtoken = "9"
 tower = "0.5.3"
 tower_governor = "0.8"
 tower-http = {version = "0.7", features = ["cors", "trace"]}

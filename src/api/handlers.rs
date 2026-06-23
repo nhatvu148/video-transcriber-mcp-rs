@@ -15,16 +15,43 @@ use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::api::jobs::{Job, JobRequest, JobResult, JobStatus, JobStore, parse_model};
+use crate::auth::{AuthUser, JwksCache};
 use crate::credits::{self, CreditStore, is_valid_device_id};
 use crate::llm::summarize_and_diagram;
 use crate::transcriber::{TranscriberEngine, TranscriptionOptions};
 use crate::utils::paths::get_default_output_dir;
+use axum::extract::FromRef;
 
 #[derive(Clone)]
 pub struct AppState {
     pub jobs: JobStore,
     pub engine: Arc<Mutex<TranscriberEngine>>,
     pub credits: CreditStore,
+    /// Cached Supabase JWKS for verifying incoming auth tokens. Cloned cheaply
+    /// (Arc) on every request. `None` only when SUPABASE_URL isn't set, in
+    /// which case any auth-requiring endpoint will 401.
+    pub jwks: Arc<JwksCache>,
+}
+
+/// Lets axum's `AuthUser` extractor pull the shared `JwksCache` out of the
+/// application state without coupling the extractor to the rest of AppState.
+impl FromRef<AppState> for Arc<JwksCache> {
+    fn from_ref(state: &AppState) -> Self {
+        state.jwks.clone()
+    }
+}
+
+/// GET /api/me — returns the current authenticated user's identity, or 401
+/// if the request lacks a valid Supabase token. Used by the frontend to
+/// confirm sign-in succeeded and surface the email in the UI.
+pub async fn get_me(AuthUser(claims): AuthUser) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::OK,
+        Json(json!({
+            "user_id": claims.sub,
+            "email": claims.email,
+        })),
+    )
 }
 
 const DEVICE_ID_HEADER: &str = "x-device-id";

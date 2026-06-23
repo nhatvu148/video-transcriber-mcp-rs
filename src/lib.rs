@@ -1,4 +1,5 @@
 pub mod api;
+pub mod auth;
 pub mod credits;
 pub mod llm;
 pub mod mcp;
