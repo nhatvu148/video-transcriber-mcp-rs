@@ -33,6 +33,10 @@ sha2 = "0.10"
 # JWT verification for Supabase Auth — used by the auth middleware to validate
 # tokens from the web/extension before crediting any operation.
 jsonwebtoken = "9"
+# Postgres-backed credit ledger (Supabase) when DATABASE_URL is set; falls back
+# to the JSON-on-disk store for standalone/forked deployments without a DB.
+# rustls (not native-tls) to match reqwest and avoid an OpenSSL build dep.
+sqlx = {version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres"]}
 tower = "0.5.3"
 tower_governor = "0.8"
 tower-http = {version = "0.7", features = ["cors", "trace"]}

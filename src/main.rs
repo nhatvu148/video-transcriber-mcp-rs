@@ -161,7 +161,7 @@ async fn run_http_transport(host: &str, port: u16) -> Result<()> {
     let app_state = AppState {
         jobs: api::new_store(),
         engine: Arc::new(Mutex::new(TranscriberEngine::new())),
-        credits: credits::new_store(),
+        credits: credits::new_store().await,
         jwks,
     };
     let api_router = api::router(app_state);
