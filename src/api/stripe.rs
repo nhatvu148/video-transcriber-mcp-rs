@@ -45,11 +45,13 @@ pub struct CheckoutRequest {
 /// Headers: X-Device-Id
 /// Returns: { "checkout_url": "https://checkout.stripe.com/..." }
 pub async fn create_checkout(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<CheckoutRequest>,
 ) -> (StatusCode, Json<Value>) {
-    let device_id = match super::handlers::require_device_id_pub(&headers) {
+    // Resolve the ledger identity (account key when signed in, else device id)
+    // so the purchase credits whoever is actually making it.
+    let identity = match super::handlers::resolve_identity_pub(&state, &headers).await {
         Ok(id) => id,
         Err(e) => return e,
     };
@@ -100,10 +102,12 @@ pub async fn create_checkout(
         ("mode", "payment".to_string()),
         ("success_url", success_url),
         ("cancel_url", cancel_url),
-        ("client_reference_id", device_id.clone()),
+        ("client_reference_id", identity.clone()),
         // Metadata is echoed back on the webhook — belt-and-braces in case
         // client_reference_id is ever stripped by a future Stripe change.
-        ("metadata[device_id]", device_id),
+        // `identity` holds an account key (`user:…`) for signed-in users or a
+        // raw device id for legacy clients; the webhook credits it verbatim.
+        ("metadata[identity]", identity),
         ("metadata[pack]", req.pack.clone()),
         ("metadata[credits]", pack_credits.to_string()),
         ("line_items[0][price]", price_id),
@@ -229,9 +233,13 @@ pub async fn webhook(
         .and_then(|s| s.get("metadata"))
         .and_then(|m| m.as_object());
 
-    let device_id = metadata
-        .and_then(|m| m.get("device_id"))
+    // Identity to credit. Prefer the new `identity` metadata key; fall back to
+    // the legacy `device_id` key (for any sessions created before this rename)
+    // and finally `client_reference_id`.
+    let identity = metadata
+        .and_then(|m| m.get("identity"))
         .and_then(|v| v.as_str())
+        .or_else(|| metadata.and_then(|m| m.get("device_id")).and_then(|v| v.as_str()))
         .map(str::to_string)
         .or_else(|| {
             session
@@ -244,11 +252,11 @@ pub async fn webhook(
         .and_then(|m| m.get("credits"))
         .and_then(|v| v.as_str());
 
-    let (device_id, credit_amount) = match (device_id, credits_str.and_then(|s| s.parse::<i32>().ok())) {
+    let (identity, credit_amount) = match (identity, credits_str.and_then(|s| s.parse::<i32>().ok())) {
         (Some(d), Some(c)) if c > 0 => (d, c),
         _ => {
             error!(
-                "checkout.session.completed missing device_id / credits in metadata: {}",
+                "checkout.session.completed missing identity / credits in metadata: {}",
                 event
             );
             // Acknowledge so Stripe stops retrying — we can't recover this one
@@ -261,10 +269,10 @@ pub async fn webhook(
         }
     };
 
-    let new_balance = credits::add(&state.credits, &device_id, credit_amount).await;
+    let new_balance = credits::add(&state.credits, &identity, credit_amount).await;
     info!(
-        "Stripe webhook credited device {} with {} credits (new balance: {})",
-        device_id, credit_amount, new_balance
+        "Stripe webhook credited {} with {} credits (new balance: {})",
+        identity, credit_amount, new_balance
     );
     (StatusCode::OK, Json(json!({ "ok": true, "balance": new_balance })))
 }

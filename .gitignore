@@ -36,3 +36,4 @@ credits.json
 
 # Task tool's internal cache (regenerated on every build)
 .task/
+extension-signing-key.pem
