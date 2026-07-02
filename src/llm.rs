@@ -96,7 +96,9 @@ When generating a `flowchart`:
   * The `class` line MUST end with the class name token (`key`). Omitting it (e.g. `class NodeA,NodeB`) is a parse error.
   * Use the exact word `key` as the class name — don't rename it.
   Use this sparingly — if everything is highlighted, nothing stands out.
-- Add edge labels (`A -->|how A leads to B| B`) where the connection isn't obvious from the node names alone.
+- Add edge labels (`A -->|how A leads to B| B`) where the connection isn't obvious from the node names alone. Keep edge labels to 4 words or fewer — long labels collide with nearby nodes.
+- Edges MUST connect two specific nodes (e.g. `NodeA --> NodeB`). NEVER point an edge at a subgraph name, and NEVER draw an edge from a node into the subgraph that contains it — Mermaid lays those out poorly and the labels overlap other nodes. To link groups, connect a representative node in one subgraph to a representative node in another.
+- Write the diagram with raw characters: use `-->` (not `--&gt;`) and `&` (not `&amp;`). Do NOT HTML-escape any part of the diagram source.
 
 Length budget (CRITICAL — exceeding this truncates the response):
 - `summary_md`: aim for 400–900 words. A digestible study note, not a transcript rewrite. Prefer tight bullets over long paragraphs. Reserve headings only for genuinely distinct sections.
@@ -267,4 +269,90 @@ fn strip_code_fences(s: &str) -> &str {
         .map(str::trim_start)
         .unwrap_or(s);
     s.strip_suffix("```").map(str::trim_end).unwrap_or(s)
+}
+
+/// Answer a follow-up question about a video, grounded ONLY in its transcript.
+/// Powers the "Chat with the video" feature. `history` is the prior turns as
+/// (role, content) pairs, where role is "user" or "assistant". Returns the
+/// assistant's answer text. Free feature — the per-video question cap is
+/// enforced client-side; this endpoint just answers.
+pub async fn chat_about_transcript(
+    transcript: &str,
+    title: &str,
+    history: &[(String, String)],
+    question: &str,
+) -> Result<String> {
+    let api_key = std::env::var("OPENROUTER_API_KEY")
+        .context("OPENROUTER_API_KEY environment variable is required")?;
+    let model =
+        std::env::var("LLM_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+
+    // Bound the transcript we send so a very long video can't blow up token
+    // cost. ~48k chars ≈ 12k tokens of context, plenty for grounded Q&A.
+    let ctx = truncate_chars(transcript, 48_000);
+
+    let system = format!(
+        "You answer questions about one specific video, using ONLY the transcript below. \
+Be concise, direct, and helpful. If the answer isn't covered in the transcript, say it \
+isn't discussed in the video rather than guessing or using outside knowledge.\n\n\
+Video title: {title}\n--- TRANSCRIPT ---\n{ctx}\n--- END TRANSCRIPT ---"
+    );
+
+    let mut messages: Vec<serde_json::Value> =
+        vec![serde_json::json!({ "role": "system", "content": system })];
+    for (role, content) in history {
+        let r = if role == "assistant" { "assistant" } else { "user" };
+        messages.push(serde_json::json!({ "role": r, "content": content }));
+    }
+    messages.push(serde_json::json!({ "role": "user", "content": question }));
+
+    let body = serde_json::json!({
+        "model": model,
+        "max_tokens": 1024,
+        "messages": messages,
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(OPENROUTER_URL)
+        .bearer_auth(&api_key)
+        .header("HTTP-Referer", "https://github.com/nhatvu148/video-transcriber-mcp-rs")
+        .header("X-Title", "video-transcriber-mcp")
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .context("OpenRouter chat request failed")?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let b = resp.text().await.unwrap_or_default();
+        anyhow::bail!("OpenRouter returned {}: {}", status, b);
+    }
+
+    let api_resp: ChatResponse = resp
+        .json()
+        .await
+        .context("Failed to parse OpenRouter chat response")?;
+    if let Some(err) = api_resp.error {
+        anyhow::bail!("OpenRouter error: {} ({:?})", err.message, err.code);
+    }
+
+    let answer = api_resp
+        .choices
+        .into_iter()
+        .next()
+        .map(|c| c.message.content)
+        .unwrap_or_default();
+    Ok(answer.trim().to_string())
+}
+
+/// Truncate to at most `max` chars on a char boundary, appending a marker.
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max).collect();
+    out.push_str("\n[...transcript truncated...]");
+    out
 }

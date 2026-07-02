@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::api::jobs::{Job, JobRequest, JobResult, JobStatus, JobStore, parse_model};
 use crate::auth::{AuthUser, JwksCache};
 use crate::credits::{self, CreditStore, is_valid_device_id};
-use crate::llm::summarize_and_diagram;
+use crate::llm::{chat_about_transcript, summarize_and_diagram};
 use crate::transcriber::{TranscriberEngine, TranscriptionOptions};
 use crate::utils::paths::get_default_output_dir;
 use axum::extract::FromRef;
@@ -52,6 +52,57 @@ pub async fn get_me(AuthUser(claims): AuthUser) -> (StatusCode, Json<Value>) {
             "email": claims.email,
         })),
     )
+}
+
+#[derive(serde::Deserialize)]
+pub struct ChatMsg {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct ChatBody {
+    pub transcript: String,
+    #[serde(default)]
+    pub title: String,
+    /// Prior conversation turns (role: "user" | "assistant").
+    #[serde(default)]
+    pub messages: Vec<ChatMsg>,
+    pub question: String,
+}
+
+/// POST /api/chat — answer a question about a video, grounded in its transcript.
+/// Auth-required so it's tied to a signed-in account. Free feature: the
+/// per-video question cap is enforced client-side, so no credit is charged.
+pub async fn chat(
+    AuthUser(_claims): AuthUser,
+    Json(body): Json<ChatBody>,
+) -> (StatusCode, Json<Value>) {
+    let q = body.question.trim();
+    if q.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "empty question" })));
+    }
+    if body.transcript.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "missing transcript" })),
+        );
+    }
+    let history: Vec<(String, String)> = body
+        .messages
+        .into_iter()
+        .map(|m| (m.role, m.content))
+        .collect();
+    match chat_about_transcript(&body.transcript, &body.title, &history, q).await {
+        Ok(answer) => (StatusCode::OK, Json(json!({ "answer": answer }))),
+        Err(e) => {
+            error!("chat failed: {e:#}");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": "chat failed, try again" })),
+            )
+        }
+    }
 }
 
 const DEVICE_ID_HEADER: &str = "x-device-id";
