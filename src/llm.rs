@@ -383,6 +383,79 @@ Video title: {title}\n--- TRANSCRIPT ---\n{ctx}\n--- END TRANSCRIPT ---"
     Ok(answer.trim().to_string())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Flashcard {
+    pub question: String,
+    pub answer: String,
+}
+
+/// Generate study flashcards (question/answer pairs) from a transcript. On-demand
+/// feature (client calls it when the user opens Flashcards), so it's a separate
+/// LLM call rather than part of the main summarize step.
+pub async fn generate_flashcards(transcript: &str, title: &str) -> Result<Vec<Flashcard>> {
+    let api_key = std::env::var("OPENROUTER_API_KEY")
+        .context("OPENROUTER_API_KEY environment variable is required")?;
+    let model =
+        std::env::var("LLM_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+    let ctx = truncate_chars(transcript, 48_000);
+
+    let system = "You create study flashcards from a video transcript. \
+Output ONLY a JSON array of objects, each exactly {\"question\": \"...\", \"answer\": \"...\"}. \
+Produce 8-15 cards that test understanding of the key ideas (not trivia). \
+Questions are clear and self-contained; answers are concise (1-3 sentences). \
+Base everything strictly on the transcript. No preamble, no explanation, no markdown fences.";
+
+    let user = format!(
+        "Video title: {title}\n\n--- TRANSCRIPT ---\n{ctx}\n--- END TRANSCRIPT ---\n\nGenerate the flashcards JSON array now."
+    );
+
+    let body = serde_json::json!({
+        "model": model,
+        "max_tokens": 2048,
+        "messages": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": user },
+        ],
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(OPENROUTER_URL)
+        .bearer_auth(&api_key)
+        .header("HTTP-Referer", "https://github.com/nhatvu148/video-transcriber-mcp-rs")
+        .header("X-Title", "video-transcriber-mcp")
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .context("OpenRouter flashcards request failed")?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let b = resp.text().await.unwrap_or_default();
+        anyhow::bail!("OpenRouter returned {}: {}", status, b);
+    }
+
+    let api_resp: ChatResponse = resp
+        .json()
+        .await
+        .context("Failed to parse OpenRouter flashcards response")?;
+    if let Some(err) = api_resp.error {
+        anyhow::bail!("OpenRouter error: {} ({:?})", err.message, err.code);
+    }
+    let raw = api_resp
+        .choices
+        .into_iter()
+        .next()
+        .map(|c| c.message.content)
+        .unwrap_or_default();
+
+    let cleaned = strip_code_fences(&raw);
+    let cards: Vec<Flashcard> =
+        serde_json::from_str(cleaned).context("flashcards response was not valid JSON")?;
+    Ok(cards)
+}
+
 /// Truncate to at most `max` chars on a char boundary, appending a marker.
 fn truncate_chars(s: &str, max: usize) -> String {
     if s.chars().count() <= max {

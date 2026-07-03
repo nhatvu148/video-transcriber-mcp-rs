@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::api::jobs::{Job, JobRequest, JobResult, JobStatus, JobStore, parse_model};
 use crate::auth::{AuthUser, JwksCache};
 use crate::credits::{self, CreditStore, is_valid_device_id};
-use crate::llm::{chat_about_transcript, summarize_and_diagram};
+use crate::llm::{chat_about_transcript, generate_flashcards, summarize_and_diagram};
 use crate::transcriber::{TranscriberEngine, TranscriptionOptions};
 use crate::utils::paths::get_default_output_dir;
 use axum::extract::FromRef;
@@ -100,6 +100,37 @@ pub async fn chat(
             (
                 StatusCode::BAD_GATEWAY,
                 Json(json!({ "error": "chat failed, try again" })),
+            )
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct FlashcardsBody {
+    pub transcript: String,
+    #[serde(default)]
+    pub title: String,
+}
+
+/// POST /api/flashcards — generate study flashcards from a transcript.
+/// Auth-required; free (generated on demand when the user opens Flashcards).
+pub async fn flashcards(
+    AuthUser(_claims): AuthUser,
+    Json(body): Json<FlashcardsBody>,
+) -> (StatusCode, Json<Value>) {
+    if body.transcript.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "missing transcript" })),
+        );
+    }
+    match generate_flashcards(&body.transcript, &body.title).await {
+        Ok(cards) => (StatusCode::OK, Json(json!({ "flashcards": cards }))),
+        Err(e) => {
+            error!("flashcards failed: {e:#}");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": "flashcards failed, try again" })),
             )
         }
     }
