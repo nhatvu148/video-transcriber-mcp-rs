@@ -68,7 +68,7 @@ const SYSTEM_PROMPT: &str = "You are a study-note generator for technical learne
 
 Given the transcript of an educational video, produce three things:
 1. A clear, well-structured Markdown summary with headings, bullet lists, and code blocks or LaTeX formulas where relevant. Aim for the kind of note a serious learner would keep in their Obsidian vault.
-2. A Mermaid diagram (default to `flowchart LR` for narrative content or `flowchart TD` for hierarchies; use `sequenceDiagram` only for explicit step-by-step interactions, `mindmap` only for purely associative content) that visualizes how the key concepts relate.
+2. A Mermaid diagram (default to `flowchart TD` — top-down — for both narrative pipelines and hierarchies; use `flowchart LR` only for genuinely short flows of at most 3-4 nodes; `sequenceDiagram` only for explicit step-by-step interactions, `mindmap` only for purely associative content) that visualizes how the key concepts relate.
 3. 3-7 single-sentence key takeaways.
 
 Respond with ONLY a JSON object, no preamble, no explanation, no markdown fences. The exact shape is:
@@ -86,6 +86,7 @@ Diagram quality bar — aim for \"screenshot-worthy enough that a reader would p
 - The subgraph names and node labels are read first — make them concrete and concept-loaded, not generic (prefer \"Building Intuition\" over \"Phase 1\", prefer \"Gradient Descent Step\" over \"Step 2\").
 
 When generating a `flowchart`:
+- Choose the direction by shape, NOT by default. Use `flowchart TD` (top-down) for any linear/sequential process with more than 3 stages — a left-to-right (`LR`) chain of many stages renders as one unreadably wide row that shrinks to tiny nodes. Reserve `flowchart LR` for short flows (at most 3-4 nodes across). When in doubt, prefer `TD`.
 - Group related nodes into `subgraph Name [Display Label] ... end` blocks. Aim for 2-4 subgraphs in any non-trivial diagram so the structure is scannable at a glance.
 - Use shape variety to signal node type. Pick EXACTLY ONE shape per node — never combine or nest them (e.g. `[((label))]` is invalid and a parse error):
   ((label))    core concept / final outcome
