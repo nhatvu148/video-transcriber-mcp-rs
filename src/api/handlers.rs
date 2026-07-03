@@ -568,7 +568,12 @@ async fn run_pipeline(
     };
 
     update_status(&store, job_id, JobStatus::Summarizing).await;
-    let llm = match summarize_and_diagram(&transcription.transcript, &transcription.metadata).await
+    let llm = match summarize_and_diagram(
+        &transcription.transcript,
+        &transcription.segments,
+        &transcription.metadata,
+    )
+    .await
     {
         Ok(l) => l,
         Err(e) => {
@@ -586,6 +591,11 @@ async fn run_pipeline(
         summary_md: llm.summary_md,
         mermaid_src: llm.mermaid_src,
         key_points: llm.key_points,
+        key_point_times: llm
+            .key_point_times
+            .iter()
+            .map(|t| t.max(0.0).round() as i64)
+            .collect(),
         model_used: transcription.model_used.as_str().to_string(),
     };
 

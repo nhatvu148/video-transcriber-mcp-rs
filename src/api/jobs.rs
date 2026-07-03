@@ -42,6 +42,9 @@ pub struct JobResult {
     pub summary_md: String,
     pub mermaid_src: String,
     pub key_points: Vec<String>,
+    /// Seconds into the video for each key point (parallel to `key_points`),
+    /// so the client can make takeaways seek the player. Empty when unavailable.
+    pub key_point_times: Vec<i64>,
     pub model_used: String,
 }
 

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-use crate::transcriber::types::VideoMetadata;
+use crate::transcriber::types::{Segment, VideoMetadata};
 
 /// LLM JSON parsing is non-deterministic — Claude Haiku occasionally emits
 /// a response that *almost* fits the schema but has a stray escape, missing
@@ -19,6 +19,12 @@ pub struct LlmResult {
     pub summary_md: String,
     pub mermaid_src: String,
     pub key_points: Vec<String>,
+    /// Seconds into the video where each key point is primarily discussed,
+    /// parallel to `key_points`. `f64` (not i64) so a stray float from the LLM
+    /// doesn't fail the whole parse; `default` so its absence is harmless
+    /// (older prompts / models simply omit it → non-clickable takeaways).
+    #[serde(default)]
+    pub key_point_times: Vec<f64>,
 }
 
 #[derive(Serialize)]
@@ -66,7 +72,7 @@ Given the transcript of an educational video, produce three things:
 3. 3-7 single-sentence key takeaways.
 
 Respond with ONLY a JSON object, no preamble, no explanation, no markdown fences. The exact shape is:
-{\"summary_md\": \"...\", \"mermaid_src\": \"...\", \"key_points\": [\"...\", \"...\"]}
+{\"summary_md\": \"...\", \"mermaid_src\": \"...\", \"key_points\": [\"...\", \"...\"], \"key_point_times\": [12, 84]}
 
 Hard rules:
 - `mermaid_src` must contain ONLY the diagram code (no ```mermaid fences, no surrounding text).
@@ -104,10 +110,12 @@ Length budget (CRITICAL — exceeding this truncates the response):
 - `summary_md`: aim for 400–900 words. A digestible study note, not a transcript rewrite. Prefer tight bullets over long paragraphs. Reserve headings only for genuinely distinct sections.
 - `mermaid_src`: 8–15 nodes total (across all subgraphs). 25+ nodes is unreadable.
 - `key_points`: 3–7 items, each one sentence.
+- `key_point_times`: an array of integers, the SAME length and order as `key_points`. Each value is the start-time in seconds — the number in the square brackets at the start of the transcript line — nearest to where that takeaway is primarily discussed. Copy the bracketed number from the most relevant line. If the transcript has no bracketed times, return an empty array.
 - TOTAL output must fit in roughly 4,000 words. If the source video is long-form, ruthlessly compress — capture the structure and key insights, not every example.";
 
 pub async fn summarize_and_diagram(
     transcript: &str,
+    segments: &[Segment],
     metadata: &VideoMetadata,
 ) -> Result<LlmResult> {
     let api_key = std::env::var("OPENROUTER_API_KEY")
@@ -115,9 +123,14 @@ pub async fn summarize_and_diagram(
     let model =
         std::env::var("LLM_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
 
+    // Feed a time-marked transcript so the model can cite where each takeaway
+    // is discussed (for key_point_times). Falls back to plain text if there
+    // are no segment timings.
+    let source = timestamped_transcript(segments, transcript);
+
     let user_msg = format!(
-        "Video title: {}\nChannel: {}\nPlatform: {}\nDuration: {}s\n\n--- TRANSCRIPT ---\n{}\n--- END TRANSCRIPT ---\n\nGenerate the JSON now.",
-        metadata.title, metadata.channel, metadata.platform, metadata.duration, transcript
+        "Video title: {}\nChannel: {}\nPlatform: {}\nDuration: {}s\n\nThe transcript is split into lines, each prefixed with its start time in seconds in square brackets, e.g. `[123] ...`. Use those numbers for key_point_times.\n\n--- TRANSCRIPT ---\n{}\n--- END TRANSCRIPT ---\n\nGenerate the JSON now.",
+        metadata.title, metadata.channel, metadata.platform, metadata.duration, source
     );
 
     // Retry loop: malformed-JSON responses come back ~1-2% of the time on
@@ -127,7 +140,7 @@ pub async fn summarize_and_diagram(
     // is meaningful.
     let mut last_parse_err: Option<anyhow::Error> = None;
     for attempt in 1..=MAX_LLM_ATTEMPTS {
-        match call_llm_once(&api_key, &model, &user_msg, transcript.len()).await {
+        match call_llm_once(&api_key, &model, &user_msg, source.len()).await {
             Ok(result) => {
                 if attempt > 1 {
                     info!("LLM call succeeded on attempt {} of {}", attempt, MAX_LLM_ATTEMPTS);
@@ -259,6 +272,29 @@ async fn call_llm_once(
     );
 
     Ok(result)
+}
+
+/// Prefix each transcript line with its start time in seconds, e.g. `[123] ...`,
+/// so the LLM can cite where each takeaway is discussed. Falls back to the plain
+/// transcript when segment timings aren't available.
+fn timestamped_transcript(segments: &[Segment], fallback: &str) -> String {
+    if segments.is_empty() {
+        return fallback.to_string();
+    }
+    let mut out = String::with_capacity(fallback.len() + segments.len() * 8);
+    for seg in segments {
+        let text = seg.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let secs = seg.start_ms / 1000;
+        out.push_str(&format!("[{secs}] {text}\n"));
+    }
+    if out.is_empty() {
+        fallback.to_string()
+    } else {
+        out
+    }
 }
 
 fn strip_code_fences(s: &str) -> &str {
