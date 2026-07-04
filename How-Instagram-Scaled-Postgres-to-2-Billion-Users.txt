@@ -1,0 +1,100 @@
+How Instagram Scaled Postgres to 2 Billion Users — Summary
+============================================================
+
+Source: https://www.youtube.com/watch?v=YLoYcwnqVzM
+Duration: ~22.5 minutes
+
+OVERVIEW
+--------
+The video explains how Instagram (and other large companies like Reddit, Notion,
+Heroku, Strava, and Discord) scaled to massive workloads while deliberately staying
+on Postgres instead of switching to NoSQL alternatives. The core message: the
+database is rarely the bottleneck — the architecture around it is. Companies that
+evaluated alternatives and stayed with Postgres did so because their problems were
+"scale problems," not "Postgres problems."
+
+
+KEY TOPICS & THE WALLS INSTAGRAM HIT
+------------------------------------
+1. Humble beginnings (2010-2012)
+   - Started with 3 engineers on EC2, photos in S3, and a SINGLE Postgres database
+     holding all user accounts, metadata, comments, likes, and the follow graph.
+   - 2011: 10M users. 2012: 27M users on a 2 TB database when Facebook acquired them
+     for $1B — still run by only a few engineers.
+   - Lesson seeded here: "Boring technology with good engineering beats new
+     technology every single time."
+
+2. Wall #1 — Connections (memory exhaustion)
+   - Each connection cost ~1.3 MB. Many Django app servers x many connections each
+     = thousands of connections eating gigabytes of RAM before any real work was done.
+   - FIX: Connection pooling via PG Bouncer — a lightweight proxy that multiplexes
+     thousands of app connections onto a small pool of real Postgres connections,
+     freeing RAM for caching, sorting, and query planning.
+   - Called out as the "single highest-leverage thing" most teams overlook.
+
+3. Wall #2 — One machine isn't enough (sharding)
+   - At 2 TB they maxed out the biggest EC2 instance (RAM + disk IO).
+   - They evaluated Cassandra and MongoDB but chose to shard Postgres instead,
+     reasoning that switching databases just hides partitioning behind a new
+     abstraction and is a one-way door.
+   - Shard key = user ID. Single-user queries become fast; the hard part is the
+     defining social query "show me photos from people I follow," which fans out
+     across many shards. They accepted this trade and solved it in the app layer
+     with caching, smart fan-out, and precomputed feeds.
+   - IMPORTANT: the shard key choice is permanent — resharding means rewriting
+     every row.
+
+4. The key innovation — Logical vs. Physical shards
+   - Instagram created several THOUSAND logical shards (Postgres schemas), decoupled
+     from the physical servers hosting them.
+   - Initially all logical shards lived on one machine. To scale, you don't reshard —
+     you just move some logical shards to a new machine (via Postgres streaming
+     replication) and update a mapping table. Data, schemas, and app code stay
+     unchanged.
+   - Takeaway emphasized as the #1 lesson: "Separate the partitioning of your data
+     from where it physically lives."
+
+5. Wall #3 — Unique IDs across shards
+   - Auto-increment IDs collide across independent shards.
+   - Rejected options: UUIDs (huge, random, no time ordering); a Flickr-style ticket
+     server (single point of failure); Twitter Snowflake (requires a separate
+     service).
+   - SOLUTION: They built Snowflake-style IDs directly into Postgres as a function.
+     A 64-bit ID split into: 41 bits timestamp (custom epoch, ~41 years), 13 bits
+     shard ID (up to 8192 shards), 10 bits sequence number (1024 IDs/ms/shard).
+   - Benefits: no coordination, no external service, no single point of failure, and
+     IDs are roughly time-sortable (so "latest photos" = sort by ID descending).
+
+
+THREE UNDERUSED POSTGRES FEATURES INSTAGRAM RELIED ON
+-----------------------------------------------------
+- Partial indexes: index only rows matching a condition (e.g., last 30 days),
+  keeping the index small and fast as old data ages out.
+- Functional indexes: index the result of a function (e.g., first 8 chars of a long
+  token) instead of the full value — far smaller, still fast for lookups.
+- Logical replication: stream every insert/update/delete to downstream systems
+  (search indexes, caches, analytics) in real time — built into Postgres, replacing
+  manual Kafka/dual-write pipelines many teams build by hand.
+
+
+NOTABLE CONCLUSIONS & TAKEAWAYS
+-------------------------------
+1. Don't shard until you absolutely have to (Instagram waited until 27M users).
+2. When you shard, separate logical from physical — never hard-code the shard count;
+   create many logical shards.
+3. Adopt Snowflake-style IDs from day one — migrating billions of rows later is
+   painful.
+4. Connection pooling (PG Bouncer) is the first visible bottleneck and the
+   highest-leverage early fix.
+5. Boring technology is a superpower — every team has a finite "complexity budget."
+   Spend it only on genuinely new problems (vector search, real-time time-series,
+   planet-scale graph traversal), not on "we have a lot of users," which Postgres
+   handles fine.
+
+Final note: This is the historical story (2010-2015). Today, post-acquisition,
+Meta serves Instagram's social graph with a purpose-built distributed system ("TAO"),
+not Postgres. But the architectural patterns — connection pooling, logical/physical
+shard decoupling, and in-database Snowflake IDs — remain influential and are copied
+across the industry. The enduring lesson: understand what you already have before
+reaching for something new. The database isn't the bottleneck; the architecture
+around it is.

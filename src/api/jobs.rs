@@ -34,6 +34,18 @@ pub struct JobRequest {
     pub language: Option<String>,
 }
 
+/// One embedded transcript passage (Phase 6 — library-wide semantic search).
+/// Returned in `JobResult` so the client can write it into `transcript_chunks`
+/// alongside the transcript row it owns.
+#[derive(Debug, Clone, Serialize)]
+pub struct TranscriptChunk {
+    pub chunk_index: i32,
+    pub content: String,
+    /// Seconds into the video for the passage's first segment (citations).
+    pub start_time: Option<f64>,
+    pub embedding: Vec<f32>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct JobResult {
     pub transcript: String,
@@ -46,6 +58,11 @@ pub struct JobResult {
     /// so the client can make takeaways seek the player. Empty when unavailable.
     pub key_point_times: Vec<i64>,
     pub model_used: String,
+    /// Embedded transcript passages for library-wide semantic search. Empty
+    /// when embedding was unavailable (the note still saves; a backfill can
+    /// re-embed it later).
+    #[serde(default)]
+    pub chunks: Vec<TranscriptChunk>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -11,13 +11,18 @@ use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, Semaphore};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use crate::api::jobs::{Job, JobRequest, JobResult, JobStatus, JobStore, parse_model};
+use crate::api::jobs::{
+    Job, JobRequest, JobResult, JobStatus, JobStore, TranscriptChunk, parse_model,
+};
 use crate::auth::{AuthUser, JwksCache};
 use crate::credits::{self, CreditStore, is_valid_device_id};
-use crate::llm::{chat_about_transcript, generate_flashcards, summarize_and_diagram};
+use crate::llm::{
+    chat_about_transcript, chunk_segments, embed, generate_flashcards, summarize_and_diagram,
+};
+use crate::transcriber::types::Segment;
 use crate::transcriber::{TranscriberEngine, TranscriptionOptions};
 use crate::utils::paths::get_default_output_dir;
 use axum::extract::FromRef;
@@ -672,6 +677,10 @@ async fn run_pipeline(
         }
     };
 
+    // Chunk + embed the transcript for library-wide semantic search (Phase 6).
+    // Best-effort: an embedding failure must NOT fail an otherwise-good job.
+    let chunks = build_transcript_chunks(&transcription.segments).await;
+
     let result = JobResult {
         transcript: transcription.transcript.clone(),
         segments: transcription.segments.clone(),
@@ -685,6 +694,7 @@ async fn run_pipeline(
             .map(|t| t.max(0.0).round() as i64)
             .collect(),
         model_used: transcription.model_used.as_str().to_string(),
+        chunks,
     };
 
     {
@@ -743,6 +753,42 @@ fn now_unix() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Chunk + embed a transcript for library-wide semantic search. Best-effort:
+/// on any embedding failure (or a count mismatch) it logs and returns empty, so
+/// the note still saves — a backfill can re-embed it later.
+async fn build_transcript_chunks(segments: &[Segment]) -> Vec<TranscriptChunk> {
+    let pieces = chunk_segments(segments);
+    if pieces.is_empty() {
+        return Vec::new();
+    }
+    let texts: Vec<String> = pieces.iter().map(|p| p.content.clone()).collect();
+    match embed(texts).await {
+        Ok(vectors) if vectors.len() == pieces.len() => pieces
+            .into_iter()
+            .zip(vectors)
+            .enumerate()
+            .map(|(i, (p, embedding))| TranscriptChunk {
+                chunk_index: i as i32,
+                content: p.content,
+                start_time: p.start_time,
+                embedding,
+            })
+            .collect(),
+        Ok(vectors) => {
+            warn!(
+                "Embedding count mismatch ({} chunks, {} vectors) — note saved without chunks",
+                pieces.len(),
+                vectors.len()
+            );
+            Vec::new()
+        }
+        Err(e) => {
+            warn!("Chunk embedding failed (note saved, not yet searchable): {e:#}");
+            Vec::new()
+        }
+    }
 }
 
 /// Periodically evict terminal (Complete/Failed/Cancelled) jobs older than a

@@ -14,6 +14,116 @@ const MAX_LLM_ATTEMPTS: usize = 3;
 const OPENROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL: &str = "anthropic/claude-haiku-4-5";
 
+const OPENROUTER_EMBEDDINGS_URL: &str = "https://openrouter.ai/api/v1/embeddings";
+/// 1536-dim. Keep in sync with the `vector(1536)` column in the
+/// transcript_chunks migration if this default changes.
+const DEFAULT_EMBEDDING_MODEL: &str = "openai/text-embedding-3-small";
+
+#[derive(Serialize)]
+struct EmbeddingRequest {
+    model: String,
+    input: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct EmbeddingResponse {
+    data: Vec<EmbeddingItem>,
+}
+
+#[derive(Deserialize)]
+struct EmbeddingItem {
+    embedding: Vec<f32>,
+    index: usize,
+}
+
+/// Embed a batch of texts via OpenRouter's (OpenAI-compatible) embeddings API.
+/// Returns one vector per input, in input order. Uses
+/// openai/text-embedding-3-small (1536-dim) unless `EMBEDDING_MODEL` overrides.
+pub async fn embed(texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
+    if texts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let api_key = std::env::var("OPENROUTER_API_KEY")
+        .context("OPENROUTER_API_KEY environment variable is required")?;
+    let model = std::env::var("EMBEDDING_MODEL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_EMBEDDING_MODEL.to_string());
+
+    let req = EmbeddingRequest { model, input: texts };
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(OPENROUTER_EMBEDDINGS_URL)
+        .bearer_auth(&api_key)
+        .header(
+            "HTTP-Referer",
+            "https://github.com/nhatvu148/video-transcriber-mcp-rs",
+        )
+        .header("X-Title", "video-transcriber-mcp")
+        .header("content-type", "application/json")
+        .json(&req)
+        .send()
+        .await
+        .context("OpenRouter embeddings request failed")?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("OpenRouter embeddings returned {}: {}", status, body);
+    }
+
+    let mut parsed: EmbeddingResponse = resp
+        .json()
+        .await
+        .context("Failed to parse embeddings response")?;
+    // OpenAI returns in input order, but sort by index defensively.
+    parsed.data.sort_by_key(|d| d.index);
+    Ok(parsed.data.into_iter().map(|d| d.embedding).collect())
+}
+
+/// A transcript passage ready to embed.
+pub struct ChunkText {
+    pub content: String,
+    /// Seconds into the video for the passage's first segment.
+    pub start_time: Option<f64>,
+}
+
+/// Split transcript segments into ~500-token passages (~2000 chars) for
+/// embedding, preserving each passage's start time for citations. Groups whole
+/// segments so a passage never splits mid-sentence.
+pub fn chunk_segments(segments: &[Segment]) -> Vec<ChunkText> {
+    const MAX_CHARS: usize = 2000; // ~500 tokens at ~4 chars/token
+    let mut chunks = Vec::new();
+    let mut buf = String::new();
+    let mut start: Option<f64> = None;
+    for seg in segments {
+        let text = seg.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        if start.is_none() {
+            start = Some(seg.start_ms as f64 / 1000.0);
+        }
+        if !buf.is_empty() {
+            buf.push(' ');
+        }
+        buf.push_str(text);
+        if buf.len() >= MAX_CHARS {
+            chunks.push(ChunkText {
+                content: std::mem::take(&mut buf),
+                start_time: start.take(),
+            });
+        }
+    }
+    if !buf.trim().is_empty() {
+        chunks.push(ChunkText {
+            content: buf,
+            start_time: start,
+        });
+    }
+    chunks
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmResult {
     pub summary_md: String,
