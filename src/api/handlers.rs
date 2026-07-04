@@ -120,6 +120,16 @@ pub async fn chat(
 #[derive(serde::Deserialize)]
 pub struct LibraryAskBody {
     pub question: String,
+    /// Prior conversation turns (role: "user" | "assistant") for multi-turn.
+    #[serde(default)]
+    pub messages: Vec<ChatMsg>,
+    /// The note currently open, if any — its full transcript is always kept in
+    /// context so "about this video" questions get full detail on top of the
+    /// library RAG. Empty/absent when asking purely across the library.
+    #[serde(default)]
+    pub transcript: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 /// One retrieved passage + its source video (Phase 6 vector search). Built via
@@ -247,7 +257,32 @@ pub async fn library_ask(
         })
         .collect();
 
-    if rows.is_empty() {
+    // 3) Build context: the currently-open note (if any) is ALWAYS included in
+    // full, then the retrieved library passages. No scope toggle — one answer
+    // grounded in both.
+    let mut context = String::new();
+    if let Some(t) = body
+        .transcript
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let title = body.title.as_deref().unwrap_or("the current video");
+        // Bound token cost on very long transcripts (~48k chars ≈ 12k tokens).
+        let truncated: String = t.chars().take(48_000).collect();
+        context.push_str(&format!(
+            "[Current video: {title}]\n{truncated}\n\n"
+        ));
+    }
+    for hit in &rows {
+        let title = hit.title.as_deref().unwrap_or("Untitled");
+        let ts = hit
+            .start_time
+            .map(|t| format!(" @ {}s", t.round() as i64))
+            .unwrap_or_default();
+        context.push_str(&format!("[From: {title}{ts}]\n{}\n\n", hit.content));
+    }
+    if context.is_empty() {
         return (
             StatusCode::OK,
             Json(json!({
@@ -258,17 +293,12 @@ pub async fn library_ask(
         );
     }
 
-    // 3) RAG — build labelled context, answer with citations.
-    let mut context = String::new();
-    for hit in &rows {
-        let title = hit.title.as_deref().unwrap_or("Untitled");
-        let ts = hit
-            .start_time
-            .map(|t| format!(" @ {}s", t.round() as i64))
-            .unwrap_or_default();
-        context.push_str(&format!("[From: {title}{ts}]\n{}\n\n", hit.content));
-    }
-    let answer = match answer_from_library(question, &context).await {
+    let history: Vec<(String, String)> = body
+        .messages
+        .iter()
+        .map(|m| (m.role.clone(), m.content.clone()))
+        .collect();
+    let answer = match answer_from_library(question, &context, &history).await {
         Ok(a) => a,
         Err(e) => {
             error!("library-ask RAG failed: {e:#}");

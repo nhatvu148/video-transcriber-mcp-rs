@@ -497,28 +497,38 @@ Video title: {title}\n--- TRANSCRIPT ---\n{ctx}\n--- END TRANSCRIPT ---"
 /// Answer a question across a user's whole library (RAG), grounded ONLY in the
 /// retrieved passages. Each passage in `context` is labelled with its source
 /// video so the model can cite which video an answer came from.
-pub async fn answer_from_library(question: &str, context: &str) -> Result<String> {
+pub async fn answer_from_library(
+    question: &str,
+    context: &str,
+    history: &[(String, String)],
+) -> Result<String> {
     let api_key = std::env::var("OPENROUTER_API_KEY")
         .context("OPENROUTER_API_KEY environment variable is required")?;
     let model =
         std::env::var("LLM_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
 
     let system = format!(
-        "You answer a question using ONLY the passages below, which are excerpts from \
-the user's own video notes. Each passage is labelled with the video it came from. \
-Synthesize a concise, direct answer and cite the video title(s) you drew from \
-(e.g. \"In *Title*, …\"). If the passages don't cover the question, say so plainly \
-rather than guessing or using outside knowledge.\n\n\
+        "You are the user's study assistant, answering using ONLY the passages below - \
+excerpts from their own video notes. A passage labelled [Current video: …] is the \
+note they're viewing right now; [From: …] passages are retrieved from the rest of \
+their library. Synthesize a concise, direct answer and cite the video title(s) you \
+drew from (e.g. \"In *Title*, …\"). If the passages don't cover the question, say so \
+plainly rather than guessing or using outside knowledge.\n\n\
 --- PASSAGES ---\n{context}\n--- END PASSAGES ---"
     );
+
+    let mut messages: Vec<serde_json::Value> =
+        vec![serde_json::json!({ "role": "system", "content": system })];
+    for (role, content) in history {
+        let r = if role == "assistant" { "assistant" } else { "user" };
+        messages.push(serde_json::json!({ "role": r, "content": content }));
+    }
+    messages.push(serde_json::json!({ "role": "user", "content": question }));
 
     let body = serde_json::json!({
         "model": model,
         "max_tokens": 1024,
-        "messages": [
-            { "role": "system", "content": system },
-            { "role": "user", "content": question },
-        ],
+        "messages": messages,
     });
 
     let client = reqwest::Client::new();
