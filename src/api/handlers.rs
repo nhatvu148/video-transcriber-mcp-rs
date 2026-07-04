@@ -171,6 +171,33 @@ pub async fn library_ask(
         );
     };
 
+    // 0) Fair-use daily cap (free feature). Atomic upsert-and-count. Fail-open:
+    // if the usage table errors (e.g. migration not yet run), don't block.
+    let cap: i32 = std::env::var("LIBRARY_ASK_DAILY_CAP")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(50);
+    let used: i32 = sqlx::query_scalar(
+        "INSERT INTO public.library_ask_usage (user_id, day, count) \
+         VALUES ($1::uuid, current_date, 1) \
+         ON CONFLICT (user_id, day) \
+         DO UPDATE SET count = library_ask_usage.count + 1 \
+         RETURNING count",
+    )
+    .bind(&claims.sub)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    if used > cap {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({
+                "error": format!("Daily limit reached ({cap} questions/day). Resets tomorrow.")
+            })),
+        );
+    }
+
     // 1) Embed the question.
     let query_vec = match embed(vec![question.to_string()]).await {
         Ok(mut v) if !v.is_empty() => v.remove(0),

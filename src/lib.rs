@@ -6,4 +6,5 @@ pub mod mcp;
 pub mod transcriber;
 pub mod utils;
 
+pub use transcriber::types::Segment;
 pub use transcriber::{TranscriberEngine, TranscriptionOptions, WhisperModel};
