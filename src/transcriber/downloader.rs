@@ -30,6 +30,25 @@ fn cookies_args() -> Option<[String; 2]> {
     )
 }
 
+/// yt-dlp extractor args that dodge YouTube's nsig download throttling — the
+/// "N bytes read, M more expected. Giving up after 10 retries" failures on the
+/// default `web` client. The `android`/`web_safari` clients serve un-throttled
+/// formats; yt-dlp falls through the list if one is unavailable. Ignored on
+/// non-YouTube URLs, so it's safe to always pass.
+///
+/// Override via `YT_DLP_PLAYER_CLIENT` if YouTube shifts which clients work.
+fn youtube_client_args() -> [String; 2] {
+    let clients = std::env::var("YT_DLP_PLAYER_CLIENT")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "android,web_safari,web".to_string());
+    [
+        "--extractor-args".to_string(),
+        format!("youtube:player_client={clients}"),
+    ]
+}
+
 /// Pure resolution of the cookie flag pair, factored out of `cookies_args` so
 /// the precedence rules can be unit-tested without touching process-global env.
 fn resolve_cookies_args(cookies_file: Option<&str>, browser: Option<&str>) -> Option<[String; 2]> {
@@ -69,6 +88,7 @@ impl VideoDownloader {
 
     async fn fetch_metadata(&self, url: &str) -> Result<VideoMetadata> {
         let mut args: Vec<String> = vec!["--dump-json".to_string()];
+        args.extend(youtube_client_args());
         if let Some(c) = cookies_args() {
             info!("Using {} {}", c[0], c[1]);
             args.extend(c);
@@ -129,9 +149,15 @@ impl VideoDownloader {
             "-x".to_string(), // Extract audio
             "--audio-format".to_string(),
             "mp3".to_string(),
+            // Be resilient to YouTube throttling interrupted streams.
+            "--retries".to_string(),
+            "10".to_string(),
+            "--fragment-retries".to_string(),
+            "10".to_string(),
             "-o".to_string(),
             output_template.to_string_lossy().to_string(),
         ];
+        args.extend(youtube_client_args());
         if let Some(c) = cookies_args() {
             args.extend(c);
         }

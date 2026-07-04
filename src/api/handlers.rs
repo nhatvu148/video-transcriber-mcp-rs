@@ -233,32 +233,54 @@ pub async fn create_job(
         Err(e) => return e,
     };
 
-    // Reserve a credit upfront. Refunded later if the pipeline ends in
-    // Failed or Cancelled. Atomic — concurrent requests can't both pass at
-    // balance=1.
-    if credits::reserve(&state.credits, &device_id).await.is_err() {
-        return payment_required(0);
-    }
-
     let job_id = Uuid::new_v4();
     let now = now_unix();
     let cancel = CancellationToken::new();
 
-    let job = Job {
-        id: job_id,
-        status: JobStatus::Queued,
-        url: req.url.clone(),
-        device_id: device_id.clone(),
-        created_at: now,
-        updated_at: now,
-        result: None,
-        error: None,
-        cancel: cancel.clone(),
-    };
-
+    // Atomic dedup + slot claim. Under a single jobs-lock we either return an
+    // existing in-flight job for this (identity, url) or insert this one to
+    // claim the slot — so two concurrent requests (the client's cross-tab race)
+    // can't both create a job. Prevents the double charge AND two concurrent
+    // yt-dlp downloads racing YouTube's throttling.
     {
         let mut store = state.jobs.lock().await;
-        store.insert(job_id, job);
+        if let Some(existing) = store.values().find(|j| {
+            j.device_id == device_id
+                && j.url == req.url
+                && matches!(
+                    j.status,
+                    JobStatus::Queued
+                        | JobStatus::Downloading
+                        | JobStatus::Transcribing
+                        | JobStatus::Summarizing
+                )
+        }) {
+            let id = existing.id;
+            info!("Reusing in-flight job {} for url {} (server dedup)", id, req.url);
+            return (StatusCode::ACCEPTED, Json(json!({ "job_id": id })));
+        }
+        store.insert(
+            job_id,
+            Job {
+                id: job_id,
+                status: JobStatus::Queued,
+                url: req.url.clone(),
+                device_id: device_id.clone(),
+                created_at: now,
+                updated_at: now,
+                result: None,
+                error: None,
+                cancel: cancel.clone(),
+            },
+        );
+    }
+
+    // Reserve a credit; roll back the just-claimed job if the caller is out of
+    // credits. Reserve is atomic — concurrent requests can't both pass at
+    // balance=1. Refunded later if the pipeline ends in Failed or Cancelled.
+    if credits::reserve(&state.credits, &device_id).await.is_err() {
+        state.jobs.lock().await.remove(&job_id);
+        return payment_required(0);
     }
 
     info!("Created job {} for url {}", job_id, req.url);
