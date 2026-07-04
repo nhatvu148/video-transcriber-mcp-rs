@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 use uuid::Uuid;
@@ -27,6 +27,11 @@ pub struct AppState {
     pub jobs: JobStore,
     pub engine: Arc<Mutex<TranscriberEngine>>,
     pub credits: CreditStore,
+    /// Bounds how many transcription pipelines run concurrently on this
+    /// machine. Excess jobs stay `Queued` and wait for a permit instead of
+    /// piling up `yt-dlp`/`ffmpeg` processes until the box runs out of
+    /// CPU/RAM. Size via `MAX_CONCURRENT_JOBS` (default 4).
+    pub pipeline_permits: Arc<Semaphore>,
     /// Cached Supabase JWKS for verifying incoming auth tokens. Cloned cheaply
     /// (Arc) on every request. `None` only when SUPABASE_URL isn't set, in
     /// which case any auth-requiring endpoint will 401.
@@ -288,8 +293,19 @@ pub async fn create_job(
     let store = state.jobs.clone();
     let engine = state.engine.clone();
     let credit_store = state.credits.clone();
+    let permits = state.pipeline_permits.clone();
     tokio::spawn(async move {
-        run_with_cancel(job_id, req, engine, store, credit_store, device_id, cancel).await
+        run_with_cancel(
+            job_id,
+            req,
+            engine,
+            store,
+            credit_store,
+            device_id,
+            cancel,
+            permits,
+        )
+        .await
     });
 
     (StatusCode::ACCEPTED, Json(json!({ "job_id": job_id })))
@@ -514,6 +530,7 @@ pub async fn upload_job(
     let store = state.jobs.clone();
     let engine = state.engine.clone();
     let credit_store = state.credits.clone();
+    let permits = state.pipeline_permits.clone();
     // Move `saved_tempdir` into the spawned task. The TempDir's Drop runs
     // when the task ends (success, failure, panic, cancellation) — at which
     // point the uploaded file and its parent directory are removed from
@@ -521,7 +538,17 @@ pub async fn upload_job(
     // `upload_job`, deleting the file before the pipeline reads it.
     tokio::spawn(async move {
         let _upload_guard = saved_tempdir;
-        run_with_cancel(job_id, req, engine, store, credit_store, device_id, cancel).await
+        run_with_cancel(
+            job_id,
+            req,
+            engine,
+            store,
+            credit_store,
+            device_id,
+            cancel,
+            permits,
+        )
+        .await
     });
 
     (StatusCode::ACCEPTED, Json(json!({ "job_id": job_id })))
@@ -569,6 +596,7 @@ async fn run_with_cancel(
     credit_store: CreditStore,
     device_id: String,
     cancel: CancellationToken,
+    permits: Arc<Semaphore>,
 ) {
     tokio::select! {
         _ = cancel.cancelled() => {
@@ -577,10 +605,17 @@ async fn run_with_cancel(
             // Refund the credit we reserved at create_job time.
             credits::refund(&credit_store, &device_id).await;
         }
-        _ = run_pipeline(job_id, req, engine, store.clone(), credit_store.clone(), device_id.clone()) => {
-            // run_pipeline set Complete (kept the reservation) or Failed
-            // (refunded inside).
-        }
+        _ = async {
+            // Wait for a concurrency slot. Under load, jobs queue here (staying
+            // Queued) instead of spawning unbounded yt-dlp/ffmpeg and starving
+            // the machine. Still cancellable via the branch above. The permit
+            // is held for the whole pipeline and released on drop.
+            if let Ok(_permit) = permits.acquire_owned().await {
+                run_pipeline(job_id, req, engine, store.clone(), credit_store.clone(), device_id.clone()).await;
+                // run_pipeline set Complete (kept the reservation) or Failed
+                // (refunded inside).
+            }
+        } => {}
     }
 }
 
@@ -708,4 +743,40 @@ fn now_unix() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Periodically evict terminal (Complete/Failed/Cancelled) jobs older than a
+/// TTL from the in-memory store, so long-lived instances don't leak memory as
+/// finished jobs accumulate. In-flight jobs are always kept; recently-finished
+/// ones stay long enough for late polls and client resumes.
+pub fn spawn_job_gc(jobs: JobStore) {
+    const TTL_SECS: i64 = 3600; // keep finished jobs ~1h for late polls/resumes
+    const INTERVAL_SECS: u64 = 600; // sweep every 10 min
+    tokio::spawn(async move {
+        let mut ticker =
+            tokio::time::interval(std::time::Duration::from_secs(INTERVAL_SECS));
+        loop {
+            ticker.tick().await;
+            let now = now_unix();
+            let mut store = jobs.lock().await;
+            let before = store.len();
+            store.retain(|_, j| {
+                matches!(
+                    j.status,
+                    JobStatus::Queued
+                        | JobStatus::Downloading
+                        | JobStatus::Transcribing
+                        | JobStatus::Summarizing
+                ) || now.saturating_sub(j.updated_at) < TTL_SECS
+            });
+            let removed = before - store.len();
+            if removed > 0 {
+                info!(
+                    "Job GC: evicted {} stale job(s), {} remain",
+                    removed,
+                    store.len()
+                );
+            }
+        }
+    });
 }

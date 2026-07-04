@@ -5,7 +5,7 @@ use rmcp::{
     transport::{stdio, streamable_http_server::StreamableHttpService},
 };
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 use tower_governor::{
     GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor,
 };
@@ -157,13 +157,30 @@ async fn run_http_transport(host: &str, port: u16) -> Result<()> {
     });
     let jwks = auth::JwksCache::new(&supabase_url);
 
+    // Cap concurrent transcription pipelines so a traffic spike queues instead
+    // of overwhelming the machine — each job spawns yt-dlp + ffmpeg locally, so
+    // unbounded concurrency exhausts CPU/RAM. Excess jobs stay Queued until a
+    // slot frees. Tune via MAX_CONCURRENT_JOBS (default 4).
+    let max_concurrent = std::env::var("MAX_CONCURRENT_JOBS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(4);
+    tracing::info!("Max concurrent transcription jobs: {max_concurrent}");
+
     // REST API state shared across all jobs
     let app_state = AppState {
         jobs: api::new_store(),
         engine: Arc::new(Mutex::new(TranscriberEngine::new())),
         credits: credits::new_store().await,
         jwks,
+        pipeline_permits: Arc::new(Semaphore::new(max_concurrent)),
     };
+
+    // Evict old finished jobs from the in-memory store so long-lived instances
+    // don't leak memory as completed jobs accumulate.
+    api::handlers::spawn_job_gc(app_state.jobs.clone());
+
     let api_router = api::router(app_state);
 
     // Permissive CORS for local dev — clients are typically browser-based.
