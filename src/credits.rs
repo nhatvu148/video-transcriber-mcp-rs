@@ -67,6 +67,18 @@ pub enum CreditStore {
     File(Arc<Mutex<FileState>>),
 }
 
+impl CreditStore {
+    /// The Postgres pool when running the Db backend (None on the File
+    /// fallback). Used by features that query Supabase directly, e.g. the
+    /// Phase 6 library vector search.
+    pub fn pool(&self) -> Option<&PgPool> {
+        match self {
+            CreditStore::Db(pool) => Some(pool),
+            CreditStore::File(_) => None,
+        }
+    }
+}
+
 /// File-backend inner state held under the lock.
 pub struct FileState {
     balances: HashMap<String, i32>,

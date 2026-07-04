@@ -494,6 +494,70 @@ Video title: {title}\n--- TRANSCRIPT ---\n{ctx}\n--- END TRANSCRIPT ---"
     Ok(answer.trim().to_string())
 }
 
+/// Answer a question across a user's whole library (RAG), grounded ONLY in the
+/// retrieved passages. Each passage in `context` is labelled with its source
+/// video so the model can cite which video an answer came from.
+pub async fn answer_from_library(question: &str, context: &str) -> Result<String> {
+    let api_key = std::env::var("OPENROUTER_API_KEY")
+        .context("OPENROUTER_API_KEY environment variable is required")?;
+    let model =
+        std::env::var("LLM_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+
+    let system = format!(
+        "You answer a question using ONLY the passages below, which are excerpts from \
+the user's own video notes. Each passage is labelled with the video it came from. \
+Synthesize a concise, direct answer and cite the video title(s) you drew from \
+(e.g. \"In *Title*, …\"). If the passages don't cover the question, say so plainly \
+rather than guessing or using outside knowledge.\n\n\
+--- PASSAGES ---\n{context}\n--- END PASSAGES ---"
+    );
+
+    let body = serde_json::json!({
+        "model": model,
+        "max_tokens": 1024,
+        "messages": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": question },
+        ],
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(OPENROUTER_URL)
+        .bearer_auth(&api_key)
+        .header(
+            "HTTP-Referer",
+            "https://github.com/nhatvu148/video-transcriber-mcp-rs",
+        )
+        .header("X-Title", "video-transcriber-mcp")
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .context("OpenRouter library-ask request failed")?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let b = resp.text().await.unwrap_or_default();
+        anyhow::bail!("OpenRouter returned {}: {}", status, b);
+    }
+
+    let api_resp: ChatResponse = resp
+        .json()
+        .await
+        .context("Failed to parse OpenRouter response")?;
+    if let Some(err) = api_resp.error {
+        anyhow::bail!("OpenRouter error: {} ({:?})", err.message, err.code);
+    }
+    let answer = api_resp
+        .choices
+        .into_iter()
+        .next()
+        .map(|c| c.message.content)
+        .unwrap_or_default();
+    Ok(answer.trim().to_string())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Flashcard {
     pub question: String,

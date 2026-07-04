@@ -30,6 +30,7 @@ pub fn router(state: AppState) -> Router {
         .route("/me", get(handlers::get_me))
         .route("/chat", post(handlers::chat))
         .route("/flashcards", post(handlers::flashcards))
+        .route("/library-ask", post(handlers::library_ask))
         .route("/auth/claim", post(handlers::claim_account))
         .route("/checkout", post(stripe::create_checkout))
         .route("/webhook/stripe", post(stripe::webhook))

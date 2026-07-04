@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
+use sqlx::Row;
 use tokio::sync::{Mutex, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -20,7 +21,8 @@ use crate::api::jobs::{
 use crate::auth::{AuthUser, JwksCache};
 use crate::credits::{self, CreditStore, is_valid_device_id};
 use crate::llm::{
-    chat_about_transcript, chunk_segments, embed, generate_flashcards, summarize_and_diagram,
+    answer_from_library, chat_about_transcript, chunk_segments, embed, generate_flashcards,
+    summarize_and_diagram,
 };
 use crate::transcriber::types::Segment;
 use crate::transcriber::{TranscriberEngine, TranscriptionOptions};
@@ -113,6 +115,161 @@ pub async fn chat(
             )
         }
     }
+}
+
+#[derive(serde::Deserialize)]
+pub struct LibraryAskBody {
+    pub question: String,
+}
+
+/// One retrieved passage + its source video (Phase 6 vector search). Built via
+/// manual row extraction — the engine's sqlx has no `macros` feature (no
+/// `FromRow` derive), matching credits.rs.
+struct LibraryHit {
+    content: String,
+    start_time: Option<f64>,
+    // Selected as ::text so this works regardless of the sqlx `uuid` feature.
+    transcript_id: String,
+    title: Option<String>,
+    url: Option<String>,
+}
+
+/// Format an embedding as a pgvector text literal: `[0.1,0.2,...]`.
+fn to_pgvector_literal(v: &[f32]) -> String {
+    let mut s = String::with_capacity(v.len() * 8 + 2);
+    s.push('[');
+    for (i, x) in v.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str(&x.to_string());
+    }
+    s.push(']');
+    s
+}
+
+/// POST /api/library-ask — answer a question across ALL of the caller's notes.
+/// Embeds the question, vector-searches their `transcript_chunks` (scoped to
+/// their user_id — the service pool bypasses RLS, so this filter is the
+/// security boundary), then RAGs an answer with citations. Free; auth-required.
+pub async fn library_ask(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Json(body): Json<LibraryAskBody>,
+) -> (StatusCode, Json<Value>) {
+    let question = body.question.trim();
+    if question.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "empty question" })),
+        );
+    }
+    let Some(pool) = state.credits.pool() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "library search needs a database backend" })),
+        );
+    };
+
+    // 1) Embed the question.
+    let query_vec = match embed(vec![question.to_string()]).await {
+        Ok(mut v) if !v.is_empty() => v.remove(0),
+        _ => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": "embedding failed, try again" })),
+            );
+        }
+    };
+    let vec_literal = to_pgvector_literal(&query_vec);
+
+    // 2) User-scoped vector search (cosine distance).
+    const K: i64 = 8;
+    let raw = match sqlx::query(
+        "SELECT c.content, c.start_time, c.transcript_id::text AS transcript_id, \
+                t.title, t.url \
+         FROM public.transcript_chunks c \
+         JOIN public.transcripts t ON t.id = c.transcript_id \
+         WHERE c.user_id = $1::uuid AND c.embedding IS NOT NULL \
+         ORDER BY c.embedding <=> $2::vector \
+         LIMIT $3",
+    )
+    .bind(&claims.sub)
+    .bind(&vec_literal)
+    .bind(K)
+    .fetch_all(pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            error!("library-ask vector search failed: {e:#}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "search failed" })),
+            );
+        }
+    };
+    let rows: Vec<LibraryHit> = raw
+        .iter()
+        .map(|r| LibraryHit {
+            content: r.get("content"),
+            start_time: r.get("start_time"),
+            transcript_id: r.get("transcript_id"),
+            title: r.get("title"),
+            url: r.get("url"),
+        })
+        .collect();
+
+    if rows.is_empty() {
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "answer": "I couldn't find anything in your library about that yet. \
+                    Transcribe a few more videos, or try rephrasing.",
+                "sources": []
+            })),
+        );
+    }
+
+    // 3) RAG — build labelled context, answer with citations.
+    let mut context = String::new();
+    for hit in &rows {
+        let title = hit.title.as_deref().unwrap_or("Untitled");
+        let ts = hit
+            .start_time
+            .map(|t| format!(" @ {}s", t.round() as i64))
+            .unwrap_or_default();
+        context.push_str(&format!("[From: {title}{ts}]\n{}\n\n", hit.content));
+    }
+    let answer = match answer_from_library(question, &context).await {
+        Ok(a) => a,
+        Err(e) => {
+            error!("library-ask RAG failed: {e:#}");
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": "answer failed, try again" })),
+            );
+        }
+    };
+
+    // Distinct source videos for the UI cards (first occurrence wins).
+    let mut seen = std::collections::HashSet::new();
+    let mut sources = Vec::new();
+    for hit in &rows {
+        if seen.insert(hit.transcript_id.clone()) {
+            sources.push(json!({
+                "transcript_id": hit.transcript_id,
+                "title": hit.title,
+                "url": hit.url,
+                "start_time": hit.start_time,
+            }));
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({ "answer": answer, "sources": sources })),
+    )
 }
 
 #[derive(serde::Deserialize)]
