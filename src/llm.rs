@@ -124,6 +124,44 @@ pub fn chunk_segments(segments: &[Segment]) -> Vec<ChunkText> {
     chunks
 }
 
+/// A transcript passage + its embedding — the unit of semantic search.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddedChunk {
+    pub chunk_index: i32,
+    pub content: String,
+    pub start_time: Option<f64>,
+    pub embedding: Vec<f32>,
+}
+
+/// Chunk a transcript and embed every passage. Shared by the REST pipeline and
+/// the local MCP save path so both write the same searchable format.
+pub async fn embed_chunks(segments: &[Segment]) -> Result<Vec<EmbeddedChunk>> {
+    let pieces = chunk_segments(segments);
+    if pieces.is_empty() {
+        return Ok(Vec::new());
+    }
+    let texts: Vec<String> = pieces.iter().map(|p| p.content.clone()).collect();
+    let vectors = embed(texts).await?;
+    if vectors.len() != pieces.len() {
+        anyhow::bail!(
+            "embedding count mismatch ({} chunks, {} vectors)",
+            pieces.len(),
+            vectors.len()
+        );
+    }
+    Ok(pieces
+        .into_iter()
+        .zip(vectors)
+        .enumerate()
+        .map(|(i, (p, embedding))| EmbeddedChunk {
+            chunk_index: i as i32,
+            content: p.content,
+            start_time: p.start_time,
+            embedding,
+        })
+        .collect())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmResult {
     pub summary_md: String,

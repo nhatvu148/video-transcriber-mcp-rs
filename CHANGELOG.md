@@ -5,6 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-07-05
+
+### Added
+
+- **Library-wide semantic search** — a "second brain" over a caller's whole
+  library:
+  - `POST /api/library-ask` (auth-required): embeds the question, vector-searches
+    the caller's own transcript chunks in Postgres (`pgvector`), and returns a
+    RAG answer that cites the source videos. Supports **multi-turn** conversation
+    (`messages[]`) and optional **current-note grounding** (`transcript` +
+    `title`), so one endpoint answers both "about this video" and "across
+    everything". Scoped to the caller's `user_id` (the service pool bypasses
+    RLS, so the filter is explicit). Fair-use daily cap via
+    `LIBRARY_ASK_DAILY_CAP` (default 50).
+  - Transcripts are **chunked and embedded** at transcription time (OpenRouter
+    embeddings, `openai/text-embedding-3-small` by default, overridable via
+    `EMBEDDING_MODEL`) and returned on `JobResult.chunks[]` for the client to
+    persist. Best-effort — an embedding failure never fails the transcription.
+  - **`backfill` binary** (`cargo run --release --bin backfill`) embeds existing
+    transcripts that predate the feature. Idempotent.
+- **Local semantic search (MCP)** — a new **`search_transcripts`** MCP tool
+  cosine-searches across every saved transcript and returns the most relevant
+  passages (with source video + timestamp), giving an MCP client (Claude Code)
+  retrieval it can't do itself. Saved transcripts now also include Whisper
+  `segments` and, when `OPENROUTER_API_KEY` is set, embedded `chunks` — matching
+  the REST `JobResult` shape. Embedding is **opt-in and best-effort**, so plain
+  transcription stays 100% offline by default.
+- **Chat with a video** — `POST /api/chat`: multi-turn Q&A grounded only in a
+  supplied transcript.
+- **Flashcards** — `POST /api/flashcards`: generates study question/answer cards
+  from a transcript.
+- **Per-takeaway timestamps** — `JobResult.key_point_times[]` (parallel to
+  `key_points`) so clients can deep-link each takeaway to its moment in the video.
+- **Supabase auth + accounts** — Supabase JWT verification and `GET /api/me`;
+  credit identity is now account-based, with a one-time claim that migrates a
+  legacy device balance into the signed-in account.
+- **Postgres credits backend** — credits move from JSON-on-disk to Postgres
+  (`DATABASE_URL`), auto-migrating any existing `credits.json` balances on first
+  boot. Falls back to the JSON file when `DATABASE_URL` is unset.
+- **Concurrency control** — `MAX_CONCURRENT_JOBS` (default 4) bounds simultaneous
+  pipelines with a semaphore so a traffic spike queues instead of overwhelming
+  the host; a background GC evicts finished jobs from the in-memory store.
+
+### Changed
+
+- **yt-dlp throttling resilience** — downloads now prefer the `android` /
+  `web_safari` player clients (`--extractor-args`) plus fragment retries, which
+  sidesteps YouTube's nsig "N bytes read… giving up" throttling. Overridable via
+  `YT_DLP_PLAYER_CLIENT`. Applied to both metadata and audio fetches.
+- **Server-side single-flight** — `POST /api/jobs` now returns the existing
+  in-flight job for the same (identity, URL) instead of creating a duplicate,
+  atomically under the jobs lock. Prevents double charges and two concurrent
+  yt-dlp downloads racing each other.
+- **Richer, sturdier Mermaid diagram prompts** — subgraphs, shape vocabulary,
+  key-node emphasis, and a preference for top-down (`flowchart TD`) pipelines for
+  screenshot-worthy framing; stricter node-label rules (no shape nesting, no
+  stray special characters) to keep the generated diagram valid.
+
+### Fixed
+
+- LLM summarisation retries up to 2× on malformed JSON before propagating the
+  error.
+- Upload tempdirs are wiped after each job (no `/tmp` leak on the upload path).
+
 ## [0.7.0] - 2026-06-15
 
 ### Changed

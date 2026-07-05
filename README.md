@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
-[![crates.io](https://img.shields.io/badge/crates.io-v0.7.0-orange.svg)](https://crates.io/crates/video-transcriber-mcp)
+[![crates.io](https://img.shields.io/badge/crates.io-v0.8.0-orange.svg)](https://crates.io/crates/video-transcriber-mcp)
 
 A Model Context Protocol (MCP) server that transcribes videos from **1000+ platforms** using whisper.cpp. Built with Rust for maximum performance and efficiency.
 
@@ -75,6 +75,9 @@ Real-world performance depends on your hardware, video length, and chosen model.
 - 🎛️ **5 model sizes** (tiny, base, small, medium, large)
 - 🌐 **90+ languages** supported
 - 📝 **Multiple output formats** (TXT, JSON, Markdown)
+- 🧠 **AI study layer** (HTTP REST): Markdown summary + Mermaid diagram + key
+  takeaways, plus `/api/chat` (grounded Q&A), `/api/flashcards`, and
+  `/api/library-ask` (semantic search across a user's whole library via pgvector)
 - 🔌 **MCP integration** for Claude Code
 - 🌐 **Dual transport** - stdio (local) and Streamable HTTP (remote)
 - ⚡ **Native binary** - no Python or Node.js required
