@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use tracing::info;
+use tracing::{info, warn};
 
 use super::audio::AudioProcessor;
 use super::downloader::VideoDownloader;
 use super::types::{
-    OutputFiles, TranscriptionOptions, TranscriptionResult, VideoMetadata, WhisperModel,
+    OutputFiles, Segment, TranscriptionOptions, TranscriptionResult, VideoMetadata, WhisperModel,
 };
 use super::whisper::WhisperTranscriber;
 
@@ -63,9 +63,39 @@ impl TranscriberEngine {
             .transcribe(&audio_path, options.model, options.language.as_deref())
             .await?;
 
+        // Enrich with embeddings so the saved transcript is semantically
+        // searchable (the `search_transcripts` MCP tool). Opt-in: needs an
+        // OPENROUTER_API_KEY, so plain transcription stays 100% offline by
+        // default. Best-effort — a failure never fails the transcription.
+        let chunks = if std::env::var("OPENROUTER_API_KEY")
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+        {
+            match crate::llm::embed_chunks(&segments).await {
+                Ok(c) => {
+                    if !c.is_empty() {
+                        info!("🔎 Embedded {} chunk(s) for local search", c.len());
+                    }
+                    c
+                }
+                Err(e) => {
+                    warn!("Embedding failed (saved without search index): {e:#}");
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+
         // Save output files
-        let files =
-            self.save_outputs(&metadata, &transcript, &options.output_dir, options.model)?;
+        let files = self.save_outputs(
+            &metadata,
+            &transcript,
+            &segments,
+            &chunks,
+            &options.output_dir,
+            options.model,
+        )?;
 
         // Calculate stats
         let word_count = transcript.split_whitespace().count();
@@ -131,6 +161,8 @@ impl TranscriberEngine {
         &self,
         metadata: &VideoMetadata,
         transcript: &str,
+        segments: &[Segment],
+        chunks: &[crate::llm::EmbeddedChunk],
         output_dir: &str,
         model: WhisperModel,
     ) -> Result<OutputFiles> {
@@ -143,10 +175,13 @@ impl TranscriberEngine {
         // Save TXT
         std::fs::write(&txt_path, transcript)?;
 
-        // Save JSON
+        // Save JSON — segments + embedded chunks make it match the Whisgram
+        // shape and power local semantic search.
         let json_output = serde_json::json!({
             "metadata": metadata,
             "transcript": transcript,
+            "segments": segments,
+            "chunks": chunks,
             "model": model.as_str(),
         });
         std::fs::write(&json_path, serde_json::to_string_pretty(&json_output)?)?;

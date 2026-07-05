@@ -131,6 +131,31 @@ impl ServerHandler for VideoTranscriberServer {
                     ),
                 ),
                 Tool::new(
+                    "search_transcripts",
+                    "Semantic search across ALL saved transcripts. Embeds the query and returns the most relevant passages (with source video + timestamp) from every transcribed video — far better than reading transcripts one by one. Requires transcripts saved with embeddings (set OPENROUTER_API_KEY when transcribing).",
+                    Arc::new(
+                        serde_json::from_value(json!({
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "What to search for across your transcripts"
+                                },
+                                "limit": {
+                                    "type": "number",
+                                    "description": "Max passages to return (default 8)"
+                                },
+                                "output_dir": {
+                                    "type": "string",
+                                    "description": format!("Optional transcripts directory. Defaults to {}", get_default_output_dir().display())
+                                }
+                            },
+                            "required": ["query"]
+                        }))
+                        .unwrap(),
+                    ),
+                ),
+                Tool::new(
                     "get_latest_transcript",
                     "Get the path and details of the most recently created/modified transcript. Useful to avoid accidentally reading old transcripts.",
                     Arc::new(
@@ -837,6 +862,161 @@ impl ServerHandler for VideoTranscriberServer {
                     );
                     Ok(CallToolResult::success(vec![Content::text(text)]))
                 }
+            }
+
+            "search_transcripts" => {
+                use std::fs;
+                use std::path::PathBuf;
+
+                let query = request
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("query"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if query.is_empty() {
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        "Provide a `query` to search for.".to_string(),
+                    )]));
+                }
+                let limit = request
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("limit"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(8) as usize;
+                let output_dir = request
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("output_dir"))
+                    .and_then(|v| v.as_str())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(get_default_output_dir);
+
+                if !output_dir.exists() {
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "📂 No transcripts directory at {}.",
+                        output_dir.display()
+                    ))]));
+                }
+
+                // Load every embedded chunk from the saved JSONs.
+                struct Cand {
+                    emb: Vec<f32>,
+                    content: String,
+                    title: String,
+                    url: String,
+                    start: Option<f64>,
+                }
+                let mut cands: Vec<Cand> = Vec::new();
+                if let Ok(entries) = fs::read_dir(&output_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                            continue;
+                        }
+                        let Ok(text) = fs::read_to_string(&path) else {
+                            continue;
+                        };
+                        let Ok(data) = serde_json::from_str::<serde_json::Value>(&text) else {
+                            continue;
+                        };
+                        let title = data["metadata"]["title"]
+                            .as_str()
+                            .unwrap_or("Untitled")
+                            .to_string();
+                        let url = data["metadata"]["url"].as_str().unwrap_or("").to_string();
+                        let Some(chunks) = data["chunks"].as_array() else {
+                            continue;
+                        };
+                        for ch in chunks {
+                            let Some(emb) = ch["embedding"].as_array() else {
+                                continue;
+                            };
+                            let embedding: Vec<f32> = emb
+                                .iter()
+                                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                                .collect();
+                            if embedding.is_empty() {
+                                continue;
+                            }
+                            cands.push(Cand {
+                                emb: embedding,
+                                content: ch["content"].as_str().unwrap_or("").to_string(),
+                                title: title.clone(),
+                                url: url.clone(),
+                                start: ch["start_time"].as_f64(),
+                            });
+                        }
+                    }
+                }
+
+                if cands.is_empty() {
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        "No embedded transcripts found to search. Re-transcribe with \
+                         OPENROUTER_API_KEY set so passages get embedded."
+                            .to_string(),
+                    )]));
+                }
+
+                let qvec = match crate::llm::embed(vec![query.clone()]).await {
+                    Ok(mut v) if !v.is_empty() => v.remove(0),
+                    _ => {
+                        return Ok(CallToolResult::success(vec![Content::text(
+                            "Failed to embed the query (check OPENROUTER_API_KEY).".to_string(),
+                        )]));
+                    }
+                };
+
+                let cosine = |a: &[f32], b: &[f32]| -> f32 {
+                    let n = a.len().min(b.len());
+                    let (mut dot, mut na, mut nb) = (0f32, 0f32, 0f32);
+                    for i in 0..n {
+                        dot += a[i] * b[i];
+                        na += a[i] * a[i];
+                        nb += b[i] * b[i];
+                    }
+                    if na == 0.0 || nb == 0.0 {
+                        0.0
+                    } else {
+                        dot / (na.sqrt() * nb.sqrt())
+                    }
+                };
+
+                let mut scored: Vec<(f32, &Cand)> =
+                    cands.iter().map(|c| (cosine(&qvec, &c.emb), c)).collect();
+                scored.sort_by(|a, b| {
+                    b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                scored.truncate(limit);
+
+                let mut out = format!(
+                    "🔎 Top {} passage(s) for \"{}\" (searched {} chunk(s)):\n\n",
+                    scored.len(),
+                    query,
+                    cands.len()
+                );
+                for (score, c) in &scored {
+                    let ts = c
+                        .start
+                        .map(|s| format!(" @ {}s", s.round() as i64))
+                        .unwrap_or_default();
+                    out.push_str(&format!(
+                        "• {}{} (relevance {:.2})\n  {}\n",
+                        c.title,
+                        ts,
+                        score,
+                        c.content.replace('\n', " ")
+                    ));
+                    if !c.url.is_empty() {
+                        out.push_str(&format!("  {}\n", c.url));
+                    }
+                    out.push('\n');
+                }
+
+                Ok(CallToolResult::success(vec![Content::text(out)]))
             }
 
             _ => Err(ErrorData::new(
