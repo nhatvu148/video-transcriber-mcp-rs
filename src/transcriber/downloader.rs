@@ -73,12 +73,26 @@ impl VideoDownloader {
         Self { temp_dir }
     }
 
-    pub async fn download(&self, url: &str) -> Result<(VideoMetadata, PathBuf)> {
+    /// Fetch metadata, then download the audio. `on_metadata`, when provided,
+    /// receives the resolved [`VideoMetadata`] the instant it's known — right
+    /// after the (fast) `--dump-json` probe and BEFORE the (slow) audio
+    /// download — so callers can surface the title without waiting for the whole
+    /// pipeline. The send is best-effort: a closed receiver never blocks or
+    /// fails the download.
+    pub async fn download(
+        &self,
+        url: &str,
+        on_metadata: Option<&tokio::sync::mpsc::UnboundedSender<VideoMetadata>>,
+    ) -> Result<(VideoMetadata, PathBuf)> {
         info!("📥 Fetching video metadata...");
         let metadata = self.fetch_metadata(url).await?;
 
         info!("📺 Detected platform: {}", metadata.platform);
         info!("🎬 Title: {}", metadata.title);
+
+        if let Some(tx) = on_metadata {
+            let _ = tx.send(metadata.clone());
+        }
 
         info!("⬇️  Downloading video (audio only)...");
         let video_path = self.download_audio(url).await?;

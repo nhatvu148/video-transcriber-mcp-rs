@@ -492,6 +492,7 @@ pub async fn create_job(
                 device_id: device_id.clone(),
                 created_at: now,
                 updated_at: now,
+                metadata: None,
                 result: None,
                 error: None,
                 cancel: cancel.clone(),
@@ -724,6 +725,7 @@ pub async fn upload_job(
         device_id: device_id.clone(),
         created_at: now,
         updated_at: now,
+        metadata: None,
         result: None,
         error: None,
         cancel: cancel.clone(),
@@ -856,12 +858,36 @@ async fn run_pipeline(
 
     update_status(&store, job_id, JobStatus::Downloading).await;
 
+    // Surface the video title mid-flight. The engine sends resolved metadata
+    // down this channel the instant yt-dlp's `--dump-json` probe returns —
+    // before the slow audio download + Whisper — and this task drops it onto the
+    // Job so the next client poll can label the working view with the real title
+    // instead of a generic "Transcribing…". Best-effort: if the job fails before
+    // metadata resolves, nothing is sent and the task simply exits.
+    let (metadata_tx, mut metadata_rx) = tokio::sync::mpsc::unbounded_channel();
+    {
+        let store = store.clone();
+        tokio::spawn(async move {
+            if let Some(metadata) = metadata_rx.recv().await {
+                let mut store = store.lock().await;
+                if let Some(job) = store.get_mut(&job_id) {
+                    // Don't clobber a job that already reached a terminal state
+                    // while we were waiting on the probe.
+                    if job.result.is_none() && job.error.is_none() {
+                        job.metadata = Some(metadata);
+                        job.updated_at = now_unix();
+                    }
+                }
+            }
+        });
+    }
+
     // The existing engine handles download → audio extraction → whisper as one call.
     // Status flips to Transcribing right before the whisper step starts inside engine.
     update_status(&store, job_id, JobStatus::Transcribing).await;
     let transcription = {
         let eng = engine.lock().await;
-        eng.transcribe(options).await
+        eng.transcribe_reporting(options, Some(metadata_tx)).await
     };
 
     let transcription = match transcription {

@@ -80,6 +80,14 @@ pub struct Job {
     pub device_id: String,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Video metadata (title, channel, duration…) surfaced as soon as yt-dlp
+    /// resolves it — BEFORE the slow audio download + Whisper steps finish — so
+    /// the client can label its working view with the real title instead of a
+    /// generic "Transcribing…". `None` until the download step reports it; once
+    /// the job is Complete the client uses `result.metadata` (the authoritative
+    /// copy) instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<VideoMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<JobResult>,
     #[serde(skip_serializing_if = "Option::is_none")]

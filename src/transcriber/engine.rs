@@ -31,6 +31,19 @@ impl TranscriberEngine {
     }
 
     pub async fn transcribe(&self, options: TranscriptionOptions) -> Result<TranscriptionResult> {
+        self.transcribe_reporting(options, None).await
+    }
+
+    /// Like [`transcribe`](Self::transcribe), but reports the resolved
+    /// [`VideoMetadata`] to `metadata_tx` as soon as it's known — before the
+    /// slow audio download + Whisper steps — so the REST job pipeline can label
+    /// its working view with the real title mid-flight. Plain `transcribe`
+    /// (used by the MCP/CLI paths, which have no live UI) passes `None`.
+    pub async fn transcribe_reporting(
+        &self,
+        options: TranscriptionOptions,
+        metadata_tx: Option<tokio::sync::mpsc::UnboundedSender<VideoMetadata>>,
+    ) -> Result<TranscriptionResult> {
         info!("🎬 Starting transcription for: {}", options.url);
 
         // Create output directory
@@ -42,15 +55,25 @@ impl TranscriberEngine {
 
         let (metadata, audio_path) = if is_local {
             info!("📂 Processing local video file");
-            let audio_path = self.process_local_video(&options.url).await?;
+            // Metadata (filename-derived title) is cheap and known up front —
+            // report it before the audio extraction so the UI can label early.
             let metadata = self.get_local_metadata(&options.url)?;
+            if let Some(tx) = &metadata_tx {
+                let _ = tx.send(metadata.clone());
+            }
+            let audio_path = self.process_local_video(&options.url).await?;
             (metadata, audio_path)
         } else {
             info!("🌐 Downloading video from URL");
             // yt-dlp already extracts audio to mp3 (-x --audio-format mp3),
             // so the returned path IS the audio. No need to re-run ffmpeg here;
-            // whisper.rs converts to 16kHz mono PCM in one shot.
-            let (metadata, audio_path) = self.downloader.download(&options.url).await?;
+            // whisper.rs converts to 16kHz mono PCM in one shot. The downloader
+            // reports metadata to `metadata_tx` right after the --dump-json probe,
+            // before the slow audio download.
+            let (metadata, audio_path) = self
+                .downloader
+                .download(&options.url, metadata_tx.as_ref())
+                .await?;
             (metadata, audio_path)
         };
 

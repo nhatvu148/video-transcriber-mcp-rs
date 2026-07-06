@@ -250,8 +250,10 @@ When generating a `flowchart`:
   * No semicolons at the end of either line.
   * The `class` line MUST end with the class name token (`key`). Omitting it (e.g. `class NodeA,NodeB`) is a parse error.
   * Use the exact word `key` as the class name — don't rename it.
+  * Every id in the `class` line MUST be a node id you actually declared above (e.g. `revenue` from `revenue((Revenue Stream))`). Never reference an id that doesn't exist — a common failure is styling `Revenue_Stream` when the node was written as a bare shape with no id.
   Use this sparingly — if everything is highlighted, nothing stands out.
 - Add edge labels (`A -->|how A leads to B| B`) where the connection isn't obvious from the node names alone. Keep edge labels to 4 words or fewer — long labels collide with nearby nodes.
+- Every node MUST have an id before its shape brackets: write `revenue((Revenue Stream))`, NEVER a bare shape like `((Revenue Stream))`. A shape with no id (especially as an edge endpoint, e.g. `sell --> ((Revenue Stream))`) is a parse error. Declare each node with an id once, then reference it by that id in edges.
 - Edges MUST connect two specific nodes (e.g. `NodeA --> NodeB`). NEVER point an edge at a subgraph name, and NEVER draw an edge from a node into the subgraph that contains it — Mermaid lays those out poorly and the labels overlap other nodes. To link groups, connect a representative node in one subgraph to a representative node in another.
 - Write the diagram with raw characters: use `-->` (not `--&gt;`) and `&` (not `&amp;`). Do NOT HTML-escape any part of the diagram source.
 
@@ -404,7 +406,7 @@ async fn call_llm_once(
 
     let json_str = strip_code_fences(raw_text.trim());
 
-    let result: LlmResult = serde_json::from_str(json_str)
+    let mut result: LlmResult = serde_json::from_str(json_str)
         .with_context(|| {
             format!(
                 "Failed to parse LLM JSON output. Raw response was:\n{}",
@@ -412,6 +414,12 @@ async fn call_llm_once(
             )
         })
         .map_err(LlmError::ParseError)?;
+
+    // Repair the most common structural Mermaid mistakes at the source of truth,
+    // before the diagram is stored — so every consumer (web, extension, share
+    // page, PNG/SVG/Obsidian exports) gets valid source. The JS renderers keep a
+    // matching repair as a last-resort net for anything this heuristic misses.
+    result.mermaid_src = sanitize_mermaid(&result.mermaid_src);
 
     info!(
         "LLM call complete: {} key points, {} char summary, {} char mermaid",
@@ -421,6 +429,84 @@ async fn call_llm_once(
     );
 
     Ok(result)
+}
+
+/// Repair the most common structural mistake the diagram LLM makes: a node
+/// *shape* used as an edge endpoint with no id in front of it, e.g.
+/// `sell --> ((Revenue Stream))`, which Mermaid rejects (it wants
+/// `sell --> revenue((Revenue Stream))`). We synthesize an id by slugifying the
+/// shape's label; that id also tends to match how the model references the same
+/// node on `class`/`classDef` lines ("Revenue Stream" → "Revenue_Stream"), so
+/// those styles keep working too.
+///
+/// Scoped to shapes that directly follow an edge operator (optionally with an
+/// `|edge label|`), so valid lines — subgraph declarations, already-id'd nodes —
+/// are never touched. This is a heuristic (Rust can't truly validate Mermaid;
+/// its parser is JS), so the renderers keep a matching last-resort repair.
+fn sanitize_mermaid(src: &str) -> String {
+    // Edge operators: -->  ---  -.->  ==>  --x  --o  <-->  o--o … plus an
+    // optional trailing `|label|` before the target node.
+    const ARROW: &str = r"(?:<?[-.=]{1,3}[->ox]|[ox][-.=]{1,3}[->ox])";
+    const EDGELABEL: &str = r"(?:\s*\|[^|\n]*\|)?";
+    // (open, close, inner-char-class) per shape, longest openers first so `((`
+    // wins over `(`. `inner` excludes the relevant brackets so the greedy body
+    // stops at the real closing token.
+    const SHAPES: &[(&str, &str, &str)] = &[
+        (r"\(\(", r"\)\)", r"[^()\n]+"),
+        (r"\(\[", r"\]\)", r"[^()\[\]\n]+"),
+        (r"\[\[", r"\]\]", r"[^\[\]\n]+"),
+        (r"\[\(", r"\)\]", r"[^()\[\]\n]+"),
+        (r"\{\{", r"\}\}", r"[^{}\n]+"),
+        (r"\[", r"\]", r"[^\[\]\n]+"),
+        (r"\(", r"\)", r"[^()\n]+"),
+        (r"\{", r"\}", r"[^{}\n]+"),
+    ];
+
+    let mut out = src.to_string();
+    for (open, close, inner) in SHAPES {
+        let pattern = format!("({ARROW}{EDGELABEL}\\s*)({open})({inner})({close})");
+        let re = match regex::Regex::new(&pattern) {
+            Ok(re) => re,
+            Err(_) => continue, // unreachable for these static patterns
+        };
+        out = re
+            .replace_all(&out, |caps: &regex::Captures| {
+                let pre = &caps[1];
+                let open_b = &caps[2];
+                let label = &caps[3];
+                let close_b = &caps[4];
+                format!("{pre}{}{open_b}{label}{close_b}", slug_node_id(label))
+            })
+            .into_owned();
+    }
+    out
+}
+
+/// Slugify a node label into an ASCII-safe Mermaid id: `<br>` → space, then any
+/// run of non-`[A-Za-z0-9_]` chars collapses to a single underscore, trimmed.
+/// Matches the JS `slug` in the renderers so both sides mint the same id.
+fn slug_node_id(label: &str) -> String {
+    let cleaned = label
+        .replace("<br/>", " ")
+        .replace("<br />", " ")
+        .replace("<br>", " ");
+    let mut s = String::with_capacity(cleaned.len());
+    let mut prev_underscore = false;
+    for ch in cleaned.trim().chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            s.push(ch);
+            prev_underscore = false;
+        } else if !prev_underscore {
+            s.push('_');
+            prev_underscore = true;
+        }
+    }
+    let trimmed = s.trim_matches('_');
+    if trimmed.is_empty() {
+        "node".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// Prefix each transcript line with its start time in seconds, e.g. `[123] ...`,
@@ -687,4 +773,45 @@ fn truncate_chars(s: &str, max: usize) -> String {
     let mut out: String = s.chars().take(max).collect();
     out.push_str("\n[...transcript truncated...]");
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repairs_bare_shape_endpoint_and_matches_class_ref() {
+        let src = "sell --> ((Revenue Stream))\nclass sell,Revenue_Stream key";
+        let out = sanitize_mermaid(src);
+        assert!(out.contains("sell --> Revenue_Stream((Revenue Stream))"));
+        // The synthesized id matches the (previously dangling) class reference.
+        assert!(out.contains("class sell,Revenue_Stream key"));
+    }
+
+    #[test]
+    fn repairs_every_shape_kind_after_arrows_and_labels() {
+        let cases = [
+            ("a --> ([Start])", "a --> Start([Start])"),
+            ("a -->|q| {Decide}", "a -->|q| Decide{Decide}"),
+            ("a --> [Some Thing]", "a --> Some_Thing[Some Thing]"),
+            ("a --> [[Sub Routine]]", "a --> Sub_Routine[[Sub Routine]]"),
+            ("a -.-> ((End))", "a -.-> End((End))"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(sanitize_mermaid(input), expected, "input: {input}");
+        }
+    }
+
+    #[test]
+    fn leaves_valid_diagrams_untouched() {
+        for valid in [
+            "A --> B",
+            "A --> B[Box]\nA --> C{Dec}",
+            "research -->|Music| suno\nx ==>|then| y[Node]",
+            "subgraph s1 [\"My Label\"]",
+            "suno[[\"Generate Music\"]]",
+        ] {
+            assert_eq!(sanitize_mermaid(valid), valid, "should be unchanged: {valid}");
+        }
+    }
 }
