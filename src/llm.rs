@@ -250,8 +250,10 @@ When generating a `flowchart`:
   * No semicolons at the end of either line.
   * The `class` line MUST end with the class name token (`key`). Omitting it (e.g. `class NodeA,NodeB`) is a parse error.
   * Use the exact word `key` as the class name — don't rename it.
+  * Every id in the `class` line MUST be a node id you actually declared above (e.g. `revenue` from `revenue((Revenue Stream))`). Never reference an id that doesn't exist — a common failure is styling `Revenue_Stream` when the node was written as a bare shape with no id.
   Use this sparingly — if everything is highlighted, nothing stands out.
 - Add edge labels (`A -->|how A leads to B| B`) where the connection isn't obvious from the node names alone. Keep edge labels to 4 words or fewer — long labels collide with nearby nodes.
+- Every node MUST have an id before its shape brackets: write `revenue((Revenue Stream))`, NEVER a bare shape like `((Revenue Stream))`. A shape with no id (especially as an edge endpoint, e.g. `sell --> ((Revenue Stream))`) is a parse error. Declare each node with an id once, then reference it by that id in edges.
 - Edges MUST connect two specific nodes (e.g. `NodeA --> NodeB`). NEVER point an edge at a subgraph name, and NEVER draw an edge from a node into the subgraph that contains it — Mermaid lays those out poorly and the labels overlap other nodes. To link groups, connect a representative node in one subgraph to a representative node in another.
 - Write the diagram with raw characters: use `-->` (not `--&gt;`) and `&` (not `&amp;`). Do NOT HTML-escape any part of the diagram source.
 
