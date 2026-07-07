@@ -363,8 +363,8 @@ pub async fn flashcards(
 const DEVICE_ID_HEADER: &str = "x-device-id";
 
 /// Public wrapper so the Stripe checkout handler resolves the same identity
-/// (authenticated account preferred, else device id) as the job handlers —
-/// ensuring a purchase credits the account a signed-in user is actually using.
+/// (authenticated account — JWT required) as the job handlers, ensuring a
+/// purchase credits the account the signed-in user is actually using.
 pub(crate) async fn resolve_identity_pub(
     state: &AppState,
     headers: &HeaderMap,
@@ -372,68 +372,49 @@ pub(crate) async fn resolve_identity_pub(
     resolve_identity(state, headers).await
 }
 
-/// Extract + validate the device id from request headers. Returns the id on
-/// success or an HTTP-ready error tuple on failure.
-fn require_device_id(headers: &HeaderMap) -> Result<String, (StatusCode, Json<Value>)> {
-    let raw = headers
-        .get(DEVICE_ID_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.trim().to_string());
-    let id = match raw {
-        Some(s) if !s.is_empty() => s,
-        _ => {
-            return Err(bad_request(
-                "missing required header: X-Device-Id (client must generate and persist a UUID)",
-            ));
-        }
-    };
-    if !is_valid_device_id(&id) {
-        return Err(bad_request(
-            "invalid X-Device-Id: must be alphanumeric + dashes, ≤128 chars",
-        ));
-    }
-    Ok(id)
-}
-
-/// Resolve the ledger identity for a request, preferring the authenticated
-/// account over the legacy device id.
+/// Resolve the ledger identity for a request. **Requires a valid Supabase
+/// JWT** — the anonymous `X-Device-Id` fallback was removed (2026-07) because
+/// it let anyone run paid transcriptions and spend credits with nothing but a
+/// self-generated device id and no account. Transcription is a paid,
+/// account-gated action, so identity here is always an authenticated account.
 ///
 /// - **Valid `Authorization: Bearer …`** → `user:<sub>` account key. This is
-///   the path the signed-in web app takes.
-/// - **Authorization present but invalid/expired** → 401. We never silently
-///   downgrade to the device path when a token was supplied — that would let a
-///   client paper over a broken session and quietly spend device credits.
-/// - **No Authorization header** → legacy `X-Device-Id` path (the extension
-///   and any pre-auth client). Returns 400 if the device header is missing.
+///   the path every signed-in client (web + extension) takes.
+/// - **Missing / malformed / invalid / expired token** → 401. We never fall
+///   back to a device identity — that fallback was the security hole.
 ///
-/// This dual path is what lets the web (authed) and extension (not yet authed)
-/// share one backend during the auth rollout.
+/// Device ids still exist, but ONLY as a migration source: `POST
+/// /api/auth/claim` reads `X-Device-Id` directly (alongside a required JWT) to
+/// fold any legacy anonymous balance into the account on first sign-in.
 async fn resolve_identity(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<String, (StatusCode, Json<Value>)> {
-    if let Some(auth_value) = headers
+    let auth_value = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-    {
-        let token = crate::auth::extract_bearer_token(auth_value).ok_or_else(|| {
+        .ok_or_else(|| {
             (
                 StatusCode::UNAUTHORIZED,
-                Json(json!({ "error": "malformed Authorization header" })),
+                Json(json!({ "error": "missing Authorization header" })),
             )
         })?;
-        return match crate::auth::verify_jwt(token, &state.jwks).await {
-            Ok(claims) => Ok(credits::account_key(&claims.sub)),
-            Err(e) => {
-                tracing::debug!("auth token rejected: {:#}", e);
-                Err((
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({ "error": "invalid or expired token" })),
-                ))
-            }
-        };
+    let token = crate::auth::extract_bearer_token(auth_value).ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "malformed Authorization header" })),
+        )
+    })?;
+    match crate::auth::verify_jwt(token, &state.jwks).await {
+        Ok(claims) => Ok(credits::account_key(&claims.sub)),
+        Err(e) => {
+            tracing::debug!("auth token rejected: {:#}", e);
+            Err((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "invalid or expired token" })),
+            ))
+        }
     }
-    require_device_id(headers)
 }
 
 fn payment_required(balance: i32) -> (StatusCode, Json<Value>) {
@@ -531,9 +512,9 @@ pub async fn create_job(
     (StatusCode::ACCEPTED, Json(json!({ "job_id": job_id })))
 }
 
-/// GET /api/balance — returns the caller's credit balance. Uses the
-/// authenticated account when signed in, else the legacy device id.
-/// Initialises to FREE_TIER_CREDITS for never-before-seen identities.
+/// GET /api/balance — returns the caller's credit balance for their
+/// authenticated account (JWT required; 401 otherwise). Initialises to
+/// FREE_TIER_CREDITS the first time an account is seen.
 pub async fn get_balance(
     State(state): State<AppState>,
     headers: HeaderMap,
