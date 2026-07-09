@@ -29,6 +29,9 @@ pub fn router(state: AppState) -> Router {
         // Free-mode notes handoff — LLM step only, 0 credits. Top-level (NOT
         // under /jobs, which would 405-collide with /jobs/{id}).
         .route("/from-transcript", post(handlers::from_transcript))
+        // URL Free mode: download + downsample audio to 16kHz mono for the
+        // browser to transcribe locally. 0 credits, duration-capped.
+        .route("/fetch-audio", post(handlers::fetch_audio))
         .route("/balance", get(handlers::get_balance))
         .route("/me", get(handlers::get_me))
         .route("/chat", post(handlers::chat))

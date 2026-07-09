@@ -34,6 +34,57 @@ impl TranscriberEngine {
         self.transcribe_reporting(options, None).await
     }
 
+    /// Download a URL's audio and re-encode to a compact 16kHz mono mp3,
+    /// returning `(metadata, bytes)`. NO transcription — for Free-mode URL,
+    /// where the browser runs Whisper locally. Downsampling to 16kHz mono keeps
+    /// the egress ~10× smaller than the raw download (the browser only needs
+    /// 16kHz mono anyway).
+    /// Cheap metadata probe (yt-dlp `--dump-json`, no download). Lets callers
+    /// reject oversized videos BEFORE the expensive download.
+    pub async fn probe_metadata(&self, url: &str) -> Result<VideoMetadata> {
+        self.downloader.fetch_metadata(url).await
+    }
+
+    pub async fn fetch_audio_16k(
+        &self,
+        url: &str,
+        output_dir: &str,
+    ) -> Result<(VideoMetadata, Vec<u8>)> {
+        std::fs::create_dir_all(output_dir).context("Failed to create output dir")?;
+        let (metadata, src_path) = self.downloader.download(url, None).await?;
+        let out_path = PathBuf::from(output_dir).join("audio16k.mp3");
+        let output = tokio::process::Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-i",
+                src_path.to_str().context("audio path is not valid UTF-8")?,
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-b:a",
+                "32k",
+                out_path.to_str().context("output path is not valid UTF-8")?,
+            ])
+            .output()
+            .await
+            .context("Failed to run ffmpeg for 16kHz downsample")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "ffmpeg 16kHz downsample failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let bytes = tokio::fs::read(&out_path)
+            .await
+            .context("Failed to read downsampled audio")?;
+        // Clean up the raw download — the downloader writes it into its own
+        // long-lived temp dir, which otherwise accumulates for the whole process
+        // lifetime. The downsampled `out_path` sits in the caller's tempdir.
+        tokio::fs::remove_file(&src_path).await.ok();
+        Ok((metadata, bytes))
+    }
+
     /// Like [`transcribe`](Self::transcribe), but reports the resolved
     /// [`VideoMetadata`] to `metadata_tx` as soon as it's known — before the
     /// slow audio download + Whisper steps — so the REST job pipeline can label
@@ -81,10 +132,16 @@ impl TranscriberEngine {
             "🎤 Transcribing audio with Whisper ({:?} model)...",
             options.model
         );
-        let (transcript, segments) = self
+        let transcription = self
             .whisper
             .transcribe(&audio_path, options.model, options.language.as_deref())
-            .await?;
+            .await;
+        // `audio_path` is always a DERIVED temp file (yt-dlp mp3 or the
+        // ffmpeg-extracted local audio), written into a long-lived TempDir that
+        // would otherwise accumulate for the whole process lifetime. Clean it up
+        // regardless of whether transcription succeeded.
+        tokio::fs::remove_file(&audio_path).await.ok();
+        let (transcript, segments) = transcription?;
 
         // Enrich with embeddings so the saved transcript is semantically
         // searchable (the `search_transcripts` MCP tool). Opt-in: needs an

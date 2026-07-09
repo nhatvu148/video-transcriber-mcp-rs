@@ -100,7 +100,7 @@ impl VideoDownloader {
         Ok((metadata, video_path))
     }
 
-    async fn fetch_metadata(&self, url: &str) -> Result<VideoMetadata> {
+    pub async fn fetch_metadata(&self, url: &str) -> Result<VideoMetadata> {
         let mut args: Vec<String> = vec!["--dump-json".to_string()];
         args.extend(youtube_client_args());
         if let Some(c) = cookies_args() {
