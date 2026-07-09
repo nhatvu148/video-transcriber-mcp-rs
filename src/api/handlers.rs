@@ -643,6 +643,28 @@ pub async fn fetch_audio(
 
     let (metadata, bytes) = {
         let eng = state.engine.lock().await;
+        // Reject oversized videos BEFORE the expensive download — a cheap
+        // --dump-json probe first, so a 2-hour video doesn't waste bandwidth+CPU.
+        match eng.probe_metadata(&url).await {
+            Ok(meta) if meta.duration > MAX_DURATION_SECS => {
+                return (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    Json(json!({
+                        "error": "Video is too long for Free mode (max 60 min). Use Fast mode."
+                    })),
+                )
+                    .into_response();
+            }
+            Ok(_) => {}
+            Err(e) => {
+                error!("fetch_audio probe failed for {url}: {e:#}");
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({ "error": format!("Couldn't read video info: {e:#}") })),
+                )
+                    .into_response();
+            }
+        }
         match eng.fetch_audio_16k(&url, &dir).await {
             Ok(r) => r,
             Err(e) => {
@@ -655,16 +677,6 @@ pub async fn fetch_audio(
             }
         }
     };
-
-    if metadata.duration > MAX_DURATION_SECS {
-        return (
-            StatusCode::PAYLOAD_TOO_LARGE,
-            Json(json!({
-                "error": "Video is too long for Free mode (max 60 min). Use Fast mode."
-            })),
-        )
-            .into_response();
-    }
 
     match Response::builder()
         .status(StatusCode::OK)

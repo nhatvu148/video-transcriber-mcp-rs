@@ -39,6 +39,12 @@ impl TranscriberEngine {
     /// where the browser runs Whisper locally. Downsampling to 16kHz mono keeps
     /// the egress ~10× smaller than the raw download (the browser only needs
     /// 16kHz mono anyway).
+    /// Cheap metadata probe (yt-dlp `--dump-json`, no download). Lets callers
+    /// reject oversized videos BEFORE the expensive download.
+    pub async fn probe_metadata(&self, url: &str) -> Result<VideoMetadata> {
+        self.downloader.fetch_metadata(url).await
+    }
+
     pub async fn fetch_audio_16k(
         &self,
         url: &str,
@@ -72,6 +78,10 @@ impl TranscriberEngine {
         let bytes = tokio::fs::read(&out_path)
             .await
             .context("Failed to read downsampled audio")?;
+        // Clean up the raw download — the downloader writes it into its own
+        // long-lived temp dir, which otherwise accumulates for the whole process
+        // lifetime. The downsampled `out_path` sits in the caller's tempdir.
+        tokio::fs::remove_file(&src_path).await.ok();
         Ok((metadata, bytes))
     }
 
