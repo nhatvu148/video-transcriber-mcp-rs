@@ -24,7 +24,7 @@ use crate::llm::{
     answer_from_library, chat_about_transcript, chunk_segments, embed, generate_flashcards,
     summarize_and_diagram,
 };
-use crate::transcriber::types::Segment;
+use crate::transcriber::types::{Segment, VideoMetadata};
 use crate::transcriber::{TranscriberEngine, TranscriptionOptions};
 use crate::utils::paths::get_default_output_dir;
 use axum::extract::FromRef;
@@ -425,6 +425,156 @@ fn payment_required(balance: i32) -> (StatusCode, Json<Value>) {
             "balance": balance,
             "checkout_endpoint": "/api/checkout",
         })),
+    )
+}
+
+/// One client-produced transcript segment (from in-browser Whisper).
+#[derive(Debug, serde::Deserialize)]
+pub struct ClientSegment {
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub text: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct FromTranscriptBody {
+    pub transcript: String,
+    #[serde(default)]
+    pub segments: Vec<ClientSegment>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub duration: Option<u64>,
+    #[serde(default)]
+    pub platform: Option<String>,
+}
+
+/// Free-mode notes handoff. The browser already transcribed (Whisper WASM), so
+/// this runs ONLY the LLM summary+diagram step and **charges 0 credits** (we
+/// never call `credits::reserve`). Auth is REQUIRED so the fair-use daily cap
+/// can bite — it's a free LLM call, the one abuse vector. Synchronous: there's
+/// no slow work, so we return the `JobResult` directly instead of job/poll.
+///
+/// Route is `POST /api/from-transcript` — NOT under `/jobs`, which would collide
+/// with `/jobs/{id}` (that only allows GET/DELETE → 405).
+pub async fn from_transcript(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Json(body): Json<FromTranscriptBody>,
+) -> (StatusCode, Json<Value>) {
+    // Cap the payload — this is a free LLM call, so bound how much work one
+    // request can trigger. ~200k chars is several hours of speech.
+    const MAX_TRANSCRIPT_CHARS: usize = 200_000;
+
+    let transcript = body.transcript.trim();
+    if transcript.is_empty() || body.segments.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "empty transcript" })),
+        );
+    }
+    if transcript.len() > MAX_TRANSCRIPT_CHARS {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({ "error": "transcript too large" })),
+        );
+    }
+
+    // Fair-use daily cap (free feature). Atomic upsert-and-count. Fail-open: if
+    // the usage table isn't there yet (migration not run) the query errors and
+    // we don't block — mirrors `library_ask`.
+    if let Some(pool) = state.credits.pool() {
+        let cap: i32 = std::env::var("FROM_TRANSCRIPT_DAILY_CAP")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(20);
+        let used: i32 = sqlx::query_scalar(
+            "INSERT INTO public.from_transcript_usage (user_id, day, count) \
+             VALUES ($1::uuid, current_date, 1) \
+             ON CONFLICT (user_id, day) \
+             DO UPDATE SET count = from_transcript_usage.count + 1 \
+             RETURNING count",
+        )
+        .bind(&claims.sub)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+        if used > cap {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({
+                    "error": format!("Daily limit reached ({cap} free notes/day). Resets tomorrow.")
+                })),
+            );
+        }
+    }
+
+    // Client segments → engine `Segment`.
+    let segments: Vec<Segment> = body
+        .segments
+        .iter()
+        .map(|s| Segment {
+            start_ms: s.start_ms,
+            end_ms: s.end_ms,
+            text: s.text.clone(),
+        })
+        .collect();
+
+    // No video source — synthesize metadata from what the client sent.
+    let duration = body
+        .duration
+        .unwrap_or_else(|| segments.last().map(|s| s.end_ms / 1000).unwrap_or(0));
+    let metadata = VideoMetadata {
+        video_id: String::new(),
+        title: body
+            .title
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or_else(|| "Local transcription".to_string()),
+        channel: String::new(),
+        duration,
+        upload_date: String::new(),
+        platform: body
+            .platform
+            .filter(|p| !p.trim().is_empty())
+            .unwrap_or_else(|| "upload".to_string()),
+        url: String::new(),
+    };
+
+    // The reused pipeline tail (same calls as `run_pipeline`, minus transcribe).
+    let llm = match summarize_and_diagram(transcript, &segments, &metadata).await {
+        Ok(l) => l,
+        Err(e) => {
+            error!("from_transcript LLM step failed: {:#}", e);
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": format!("{e:#}") })),
+            );
+        }
+    };
+
+    // Best-effort embeddings for library search — a failure won't fail the note.
+    let chunks = build_transcript_chunks(&segments).await;
+
+    let result = JobResult {
+        transcript: transcript.to_string(),
+        segments,
+        metadata,
+        summary_md: llm.summary_md,
+        mermaid_src: llm.mermaid_src,
+        key_points: llm.key_points,
+        key_point_times: llm
+            .key_point_times
+            .iter()
+            .map(|t| t.max(0.0).round() as i64)
+            .collect(),
+        model_used: "browser-whisper".to_string(),
+        chunks,
+    };
+
+    (
+        StatusCode::OK,
+        Json(serde_json::to_value(result).unwrap_or_else(|_| json!({}))),
     )
 }
 
