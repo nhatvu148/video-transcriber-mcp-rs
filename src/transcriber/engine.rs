@@ -132,10 +132,16 @@ impl TranscriberEngine {
             "🎤 Transcribing audio with Whisper ({:?} model)...",
             options.model
         );
-        let (transcript, segments) = self
+        let transcription = self
             .whisper
             .transcribe(&audio_path, options.model, options.language.as_deref())
-            .await?;
+            .await;
+        // `audio_path` is always a DERIVED temp file (yt-dlp mp3 or the
+        // ffmpeg-extracted local audio), written into a long-lived TempDir that
+        // would otherwise accumulate for the whole process lifetime. Clean it up
+        // regardless of whether transcription succeeded.
+        tokio::fs::remove_file(&audio_path).await.ok();
+        let (transcript, segments) = transcription?;
 
         // Enrich with embeddings so the saved transcript is semantically
         // searchable (the `search_transcripts` MCP tool). Opt-in: needs an
