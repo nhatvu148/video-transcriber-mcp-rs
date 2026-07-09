@@ -34,6 +34,47 @@ impl TranscriberEngine {
         self.transcribe_reporting(options, None).await
     }
 
+    /// Download a URL's audio and re-encode to a compact 16kHz mono mp3,
+    /// returning `(metadata, bytes)`. NO transcription — for Free-mode URL,
+    /// where the browser runs Whisper locally. Downsampling to 16kHz mono keeps
+    /// the egress ~10× smaller than the raw download (the browser only needs
+    /// 16kHz mono anyway).
+    pub async fn fetch_audio_16k(
+        &self,
+        url: &str,
+        output_dir: &str,
+    ) -> Result<(VideoMetadata, Vec<u8>)> {
+        std::fs::create_dir_all(output_dir).context("Failed to create output dir")?;
+        let (metadata, src_path) = self.downloader.download(url, None).await?;
+        let out_path = PathBuf::from(output_dir).join("audio16k.mp3");
+        let output = tokio::process::Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-i",
+                src_path.to_str().context("audio path is not valid UTF-8")?,
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-b:a",
+                "32k",
+                out_path.to_str().context("output path is not valid UTF-8")?,
+            ])
+            .output()
+            .await
+            .context("Failed to run ffmpeg for 16kHz downsample")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "ffmpeg 16kHz downsample failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let bytes = tokio::fs::read(&out_path)
+            .await
+            .context("Failed to read downsampled audio")?;
+        Ok((metadata, bytes))
+    }
+
     /// Like [`transcribe`](Self::transcribe), but reports the resolved
     /// [`VideoMetadata`] to `metadata_tx` as soon as it's known — before the
     /// slow audio download + Whisper steps — so the REST job pipeline can label

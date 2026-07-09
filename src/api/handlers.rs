@@ -1,7 +1,9 @@
 use axum::{
     Json,
+    body::Body,
     extract::{Multipart, Path, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -447,6 +449,10 @@ pub struct FromTranscriptBody {
     pub duration: Option<u64>,
     #[serde(default)]
     pub platform: Option<String>,
+    /// Source URL (for URL Free mode) — so the note dedupes by URL and its
+    /// timestamps deep-link to the video. Empty for file uploads.
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 /// Free-mode notes handoff. The browser already transcribed (Whisper WASM), so
@@ -538,7 +544,10 @@ pub async fn from_transcript(
             .platform
             .filter(|p| !p.trim().is_empty())
             .unwrap_or_else(|| "upload".to_string()),
-        url: String::new(),
+        url: body
+            .url
+            .filter(|u| !u.trim().is_empty())
+            .unwrap_or_default(),
     };
 
     // The reused pipeline tail (same calls as `run_pipeline`, minus transcribe).
@@ -576,6 +585,107 @@ pub async fn from_transcript(
         StatusCode::OK,
         Json(serde_json::to_value(result).unwrap_or_else(|_| json!({}))),
     )
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct FetchAudioBody {
+    pub url: String,
+}
+
+/// Percent-encode a string so it's safe (and Unicode-preserving) in an HTTP
+/// header value — titles are often non-ASCII (e.g. Vietnamese). The client
+/// decodes with `decodeURIComponent`.
+fn header_pct(s: &str) -> String {
+    s.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
+}
+
+/// URL Free mode. Download a video's audio via yt-dlp and return it downsampled
+/// to 16kHz mono (tiny egress) so the BROWSER can run Whisper locally — browsers
+/// can't run yt-dlp themselves. 0 credits; auth required; duration-capped to
+/// bound egress + in-browser transcribe time. Metadata rides in headers so the
+/// browser can post it to /api/from-transcript for notes.
+pub async fn fetch_audio(
+    State(state): State<AppState>,
+    AuthUser(_claims): AuthUser,
+    Json(body): Json<FetchAudioBody>,
+) -> Response {
+    // Cap the audio length: bounds egress AND how long the browser grinds on it.
+    const MAX_DURATION_SECS: u64 = 60 * 60;
+
+    let url = body.url.trim().to_string();
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "a valid http(s) URL is required" })),
+        )
+            .into_response();
+    }
+
+    let tmp = match tempfile::tempdir() {
+        Ok(t) => t,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("{e}") })),
+            )
+                .into_response();
+        }
+    };
+    let dir = tmp.path().to_string_lossy().to_string();
+
+    let (metadata, bytes) = {
+        let eng = state.engine.lock().await;
+        match eng.fetch_audio_16k(&url, &dir).await {
+            Ok(r) => r,
+            Err(e) => {
+                error!("fetch_audio failed for {url}: {e:#}");
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({ "error": format!("Couldn't fetch audio: {e:#}") })),
+                )
+                    .into_response();
+            }
+        }
+    };
+
+    if metadata.duration > MAX_DURATION_SECS {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({
+                "error": "Video is too long for Free mode (max 60 min). Use Fast mode."
+            })),
+        )
+            .into_response();
+    }
+
+    match Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "audio/mpeg")
+        .header("X-Whisgram-Title", header_pct(&metadata.title))
+        .header("X-Whisgram-Duration", metadata.duration.to_string())
+        .header("X-Whisgram-Platform", header_pct(&metadata.platform))
+        .header("X-Whisgram-Url", header_pct(&metadata.url))
+        .header(
+            "Access-Control-Expose-Headers",
+            "X-Whisgram-Title, X-Whisgram-Duration, X-Whisgram-Platform, X-Whisgram-Url",
+        )
+        .body(Body::from(bytes))
+    {
+        Ok(r) => r,
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "failed to build audio response" })),
+        )
+            .into_response(),
+    }
 }
 
 pub async fn create_job(
