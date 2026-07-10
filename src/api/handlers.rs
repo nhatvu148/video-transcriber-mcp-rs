@@ -486,16 +486,19 @@ pub async fn from_transcript(
         );
     }
 
-    // Fair-use daily cap (free feature). Atomic upsert-and-count. Fail-open: if
-    // the usage table isn't there yet (migration not run) the query errors and
-    // we don't block — mirrors `library_ask`.
+    // Fair-use daily cap (free feature). Atomic upsert-and-count. FAIL-CLOSED:
+    // this is a free, uncapped LLM+diagram call if the cap can't be enforced, so
+    // a DB error (or a missing usage table) refuses the request rather than
+    // waving it through. Requires the `from_transcript_usage` migration to be
+    // deployed — without it this endpoint returns 503. (Contrast `library_ask`,
+    // which fails open because one stray extra question is cheap; this isn't.)
     if let Some(pool) = state.credits.pool() {
         let cap: i32 = std::env::var("FROM_TRANSCRIPT_DAILY_CAP")
             .ok()
             .and_then(|v| v.parse().ok())
             .filter(|&n| n > 0)
             .unwrap_or(20);
-        let used: i32 = sqlx::query_scalar(
+        let used: i32 = match sqlx::query_scalar(
             "INSERT INTO public.from_transcript_usage (user_id, day, count) \
              VALUES ($1::uuid, current_date, 1) \
              ON CONFLICT (user_id, day) \
@@ -505,7 +508,18 @@ pub async fn from_transcript(
         .bind(&claims.sub)
         .fetch_one(pool)
         .await
-        .unwrap_or(0);
+        {
+            Ok(n) => n,
+            Err(e) => {
+                error!("from_transcript cap check failed for {}: {e:#}", claims.sub);
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({
+                        "error": "Free-mode notes are temporarily unavailable — please try again shortly, or use Fast mode."
+                    })),
+                );
+            }
+        };
         if used > cap {
             return (
                 StatusCode::TOO_MANY_REQUESTS,
