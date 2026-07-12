@@ -888,6 +888,33 @@ pub async fn upload_job(
         Err(e) => return e,
     };
 
+    // Refuse an over-limit upload up front with a clear message. Otherwise
+    // `DefaultBodyLimit` (see api/mod.rs) truncates the body mid-stream and the
+    // multipart reader below fails with an opaque "read chunk: Error parsing
+    // multipart/form-data" 400 — baffling to a user who just uploaded a 7 GB
+    // video. Content-Length includes multipart overhead, so it's an upper bound;
+    // close enough for a friendly refusal. (The web app now extracts audio
+    // client-side, so this mainly guards the extension / raw-upload fallbacks.)
+    if let Some(len) = headers
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        if len > super::UPLOAD_MAX_BYTES as u64 {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(json!({
+                    "error": format!(
+                        "File too large: {:.2} GB. The upload limit is 2 GB — \
+                         extract the audio (e.g. `ffmpeg -i input -vn -ac 1 -ar \
+                         16000 audio.mp3`) and upload that instead.",
+                        len as f64 / (1024.0 * 1024.0 * 1024.0)
+                    )
+                })),
+            );
+        }
+    }
+
     // Reserve credit BEFORE accepting the upload — refusing late wastes the
     // user's upload bandwidth, but we don't want to commit Modal cost before
     // the gate check. This is the right place.
