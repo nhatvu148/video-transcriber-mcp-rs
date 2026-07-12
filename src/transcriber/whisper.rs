@@ -214,6 +214,14 @@ fn transcribe_local(
     params.set_print_timestamps(false);
     params.set_n_threads(optimal_whisper_threads());
 
+    // Anti-hallucination: over music/silence Whisper otherwise repeats a phrase
+    // dozens of times. n_max_text_ctx(0) stops it feeding the prior window's
+    // text back in (so a loop can't feed itself — the biggest single fix), and
+    // suppress_nst drops non-speech tokens. Mirrors the Modal worker's
+    // condition_on_previous_text=False. (Matches whisper-cli `-mc 0 -sns`.)
+    params.set_n_max_text_ctx(0);
+    params.set_suppress_nst(true);
+
     info!("Loading audio file...");
     let audio_data = load_audio_as_pcm(audio_path)?;
 
