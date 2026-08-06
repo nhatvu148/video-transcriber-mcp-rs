@@ -87,6 +87,25 @@ fn priced_tool_entry(tool: &str) -> Option<(&'static str, &'static str)> {
 /// would let a malformed body extract a 402 for work that never happens.
 pub fn priced_tool_in_body(body: &[u8]) -> Option<(&'static str, &'static str)> {
     let json: serde_json::Value = serde_json::from_slice(body).ok()?;
+
+    // A JSON-RPC batch is an array, and `Value::get("method")` on an array is
+    // None — so without this, a batch wrapping a priced call would read as
+    // free. rmcp 3.1 rejects batches at the transport (415) so it is not
+    // currently reachable, but a money path must not depend on a downstream
+    // layer's present behaviour: MCP allowed batching until 2025-11-25, and
+    // an rmcp change re-enabling it would silently open a bypass. Charge if
+    // any element is priced.
+    if let Some(batch) = json.as_array() {
+        return batch
+            .iter()
+            .find_map(|entry| priced_tool_in_value(entry));
+    }
+
+    priced_tool_in_value(&json)
+}
+
+/// The single-message case, shared with each element of a batch.
+fn priced_tool_in_value(json: &serde_json::Value) -> Option<(&'static str, &'static str)> {
     if json.get("method")?.as_str()? != "tools/call" {
         return None;
     }
@@ -213,7 +232,14 @@ where
             let bytes = match axum::body::to_bytes(body, 2 * 1024 * 1024).await {
                 Ok(bytes) => bytes,
                 // Unreadable body: hand it down and let MCP produce the error.
-                Err(_) => return free.call(Request::from_parts(parts, Body::empty())).await,
+                // Substituting an empty body would surface as a confusing
+                // downstream parse error; say what actually happened.
+                Err(_) => {
+                    return Ok(axum::response::IntoResponse::into_response((
+                        axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+                        "request body too large for the MCP endpoint",
+                    )));
+                }
             };
 
             let priced = priced_tool_in_body(&bytes);
@@ -335,5 +361,44 @@ mod tests {
             "params": {"name": "no_such_tool", "arguments": {}}
         }));
         assert_eq!(priced_tool_in_body(&request), None);
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A batch wrapping a priced call must be charged, not waved through.
+    /// rmcp rejects batches today, so this guards against a future change
+    /// re-opening the bypass rather than a live hole.
+    #[test]
+    fn a_batch_containing_a_priced_call_is_gated() {
+        let batch = serde_json::to_vec(&json!([
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+             "params": {"name": "transcribe_video", "arguments": {}}}
+        ]))
+        .unwrap();
+        assert_eq!(
+            priced_tool_in_body(&batch),
+            Some(("transcribe_video", "0.20"))
+        );
+    }
+
+    #[test]
+    fn a_batch_of_only_free_calls_is_free() {
+        let batch = serde_json::to_vec(&json!([
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+             "params": {"name": "list_transcripts", "arguments": {}}}
+        ]))
+        .unwrap();
+        assert_eq!(priced_tool_in_body(&batch), None);
+    }
+
+    #[test]
+    fn an_empty_batch_is_free() {
+        assert_eq!(priced_tool_in_body(b"[]"), None);
     }
 }
