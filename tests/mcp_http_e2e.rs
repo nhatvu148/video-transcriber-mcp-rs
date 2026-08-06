@@ -533,3 +533,54 @@ async fn priced_tool_is_not_challenged_when_payments_are_disabled() {
         "payments are off; nothing should be challenged"
     );
 }
+
+/// Agents pick tools partly on cost, so a priced tool must say so in the
+/// catalogue — otherwise the first a caller knows of the charge is a 402.
+#[tokio::test]
+async fn priced_tool_advertises_its_price_in_the_catalogue() {
+    let server = HttpServer::start_with_env(&paid_server_env()).await;
+    let (session, _) = server.open_session().await;
+
+    let result = server.request(&session, 2, "tools/list", json!({})).await;
+    let tools = result["tools"].as_array().expect("tools");
+    let transcribe = tools
+        .iter()
+        .find(|t| t["name"] == "transcribe_video")
+        .expect("transcribe_video");
+    let description = transcribe["description"].as_str().expect("description");
+
+    assert!(
+        description.contains("0.20") && description.contains("402"),
+        "priced tool must advertise cost and the 402 flow: {description}"
+    );
+
+    // Free tools must not claim a price.
+    let free = tools
+        .iter()
+        .find(|t| t["name"] == "list_transcripts")
+        .expect("list_transcripts");
+    assert!(
+        !free["description"].as_str().unwrap().contains("COST"),
+        "free tools must not advertise a price"
+    );
+}
+
+/// …and with payments off, nothing mentions cost at all.
+#[tokio::test]
+async fn no_price_is_advertised_when_payments_are_disabled() {
+    let server = HttpServer::start().await;
+    let (session, _) = server.open_session().await;
+
+    let result = server.request(&session, 2, "tools/list", json!({})).await;
+    let transcribe = result["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .find(|t| t["name"] == "transcribe_video")
+        .expect("transcribe_video");
+
+    assert!(
+        !transcribe["description"].as_str().unwrap().contains("COST"),
+        "must not advertise a price when payments are off"
+    );
+}

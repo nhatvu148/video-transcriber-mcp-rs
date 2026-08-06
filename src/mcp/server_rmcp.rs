@@ -31,6 +31,36 @@ impl VideoTranscriberServer {
     }
 }
 
+
+/// Description for `transcribe_video`, with the price appended when the
+/// deployment charges for it.
+///
+/// Agents choose tools partly on cost, so a priced tool that doesn't say so
+/// gets called blind and the caller discovers the charge only via a 402. The
+/// price lives in the catalogue where it can inform the decision, which is
+/// also what the x402 conventions recommend.
+///
+/// Reads the same variables as the payment layer so the two can't disagree:
+/// silent when payments are off, which is the default.
+fn transcribe_video_description() -> String {
+    const BASE: &str = "Transcribe videos from 1000+ platforms (YouTube, Vimeo, TikTok, Twitter, etc.) or local video files using whisper.cpp (4-10x faster than Python whisper!). Downloads/extracts audio and generates transcript in TXT, JSON, and Markdown formats.";
+
+    let charging = std::env::var("X402_PAY_TO")
+        .ok()
+        .is_some_and(|v| !v.trim().is_empty());
+    if !charging {
+        return BASE.to_string();
+    }
+
+    let price = std::env::var("X402_PRICE_USD").unwrap_or_else(|_| "0.20".to_string());
+    let network = std::env::var("X402_NETWORK").unwrap_or_else(|_| "base-sepolia".to_string());
+    format!(
+        "{BASE} COST: ${price} USDC per call ({network}), paid via x402 — \
+         the server answers an unpaid call with HTTP 402 and payment \
+         instructions. All other tools on this server are free."
+    )
+}
+
 impl ServerHandler for VideoTranscriberServer {
     fn get_info(&self) -> ServerInfo {
         // rmcp marks InitializeResult as #[non_exhaustive], so the
@@ -64,7 +94,7 @@ impl ServerHandler for VideoTranscriberServer {
             // `..: None` boilerplate per tool.
             Tool::new(
                 "transcribe_video",
-                "Transcribe videos from 1000+ platforms (YouTube, Vimeo, TikTok, Twitter, etc.) or local video files using whisper.cpp (4-10x faster than Python whisper!). Downloads/extracts audio and generates transcript in TXT, JSON, and Markdown formats.",
+                transcribe_video_description(),
                 Arc::new(
                     serde_json::from_value(json!({
                         "type": "object",
