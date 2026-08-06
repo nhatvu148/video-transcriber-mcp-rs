@@ -5116,6 +5116,7 @@ dependencies = [
  "anyhow",
  "async-process",
  "axum",
+ "base64 0.23.1",
  "chrono",
  "clap",
  "criterion",

@@ -27,15 +27,26 @@
 //! Payment is not authorization. Settling a call buys that one call and
 //! nothing else.
 //!
-//! # Known gap: settlement on tool failure
+//! # Not billing for failed work
 //!
 //! `settle_after_execution` skips settlement only when the response carries a
-//! non-2xx status (`paygate.rs`: `is_client_error() || is_server_error()`).
-//! MCP reports tool failures as **HTTP 200** with `isError: true` in the
-//! JSON-RPC body, so a failed transcription still settles and the caller is
-//! billed for work that produced nothing. Closing this needs the response
-//! body inspected before settlement, which the layer exposes no hook for
-//! today. Tracked with the idempotency work.
+//! non-2xx status (`paygate.rs`: `is_client_error() || is_server_error()`),
+//! but MCP reports tool failures as **HTTP 200** with `isError: true` in the
+//! body. Left alone, a failed transcription settles and the caller pays for
+//! nothing.
+//!
+//! Since x402 decides on status alone, [`McpFailureStatus`] sits *between* the
+//! payment layer and the MCP service and re-stamps a failed tool result as
+//! 502, which makes x402 skip settlement. The router then restores the
+//! original status on the way out, so the client still sees the ordinary
+//! JSON-RPC error it expects. The response body is untouched.
+//!
+//! # Not billing twice for one payment
+//!
+//! A client that retries an in-flight or completed call — a dropped
+//! connection, an impatient agent — would otherwise run the work again and
+//! settle again. [`NonceGuard`] keys execution on the payment nonce, so a
+//! replayed payment is refused rather than charged twice.
 
 use std::task::{Context, Poll};
 
@@ -204,6 +215,156 @@ pub fn layer_from_env() -> Option<PaidLayer> {
     )
 }
 
+
+// ---------------------------------------------------------------------------
+// Idempotency
+// ---------------------------------------------------------------------------
+
+/// Remembers which payment nonces have already been admitted.
+///
+/// x402 nonces are single-use, so a nonce arriving twice means a retry of the
+/// same logical call. Without this, a client whose connection dropped mid
+/// transcription would run — and settle — the work a second time.
+///
+/// In-memory and per-process: a restart or a second machine forgets. That is
+/// enough for a single-instance deployment and is stated plainly rather than
+/// implied; a horizontally scaled deployment needs this in Postgres beside the
+/// credit ledger.
+#[derive(Clone, Default)]
+pub struct NonceGuard {
+    seen: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>>,
+}
+
+/// How long a nonce is remembered. Comfortably longer than a transcription,
+/// and bounded so the map can't grow without limit.
+const NONCE_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+impl NonceGuard {
+    /// Claims a nonce. `true` means it's new and the call may proceed;
+    /// `false` means it's a replay.
+    ///
+    /// Claim-on-check rather than check-then-act, so two concurrent retries
+    /// can't both pass — the same race the credit ledger guards against.
+    pub fn claim(&self, nonce: &str) -> bool {
+        let now = std::time::Instant::now();
+        let mut seen = match self.seen.lock() {
+            Ok(seen) => seen,
+            // A poisoned lock must not become a free pass to double-charge.
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        seen.retain(|_, claimed_at| now.duration_since(*claimed_at) < NONCE_TTL);
+        if seen.contains_key(nonce) {
+            return false;
+        }
+        seen.insert(nonce.to_string(), now);
+        true
+    }
+}
+
+/// Pulls the payment nonce out of an `X-PAYMENT` header.
+///
+/// The header is base64 JSON; the nonce lives in the scheme-specific payload,
+/// so this searches rather than assuming one shape — the field has moved
+/// between protocol versions. `None` when there's no usable nonce, in which
+/// case the call proceeds: refusing every payment we can't parse would break
+/// paying clients, and x402 itself still rejects a genuinely replayed payment
+/// on-chain.
+pub fn payment_nonce(header: &str) -> Option<String> {
+    use base64::Engine as _;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(header.trim())
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(header.trim()))
+        .ok()?;
+    let json: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
+    find_nonce(&json)
+}
+
+fn find_nonce(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(nonce) = map.get("nonce").and_then(|n| n.as_str()) {
+                return Some(nonce.to_string());
+            }
+            map.values().find_map(find_nonce)
+        }
+        serde_json::Value::Array(items) => items.iter().find_map(find_nonce),
+        _ => None,
+    }
+}
+
+/// Header used to carry a tool failure past the payment layer.
+const TOOL_FAILED_HEADER: &str = "x-mcp-tool-failed";
+
+/// Re-stamps an MCP tool failure as 502 so the payment layer above skips
+/// settlement. The router restores the real status afterwards.
+#[derive(Clone)]
+pub struct McpFailureStatus<S> {
+    inner: S,
+}
+
+impl<S> McpFailureStatus<S> {
+    pub fn new(inner: S) -> Self {
+        Self { inner }
+    }
+}
+
+impl<S> Service<Request<Body>> for McpFailureStatus<S>
+where
+    S: Service<Request<Body>, Response = axum::response::Response> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+    S::Error: Send + 'static,
+{
+    type Response = axum::response::Response;
+    type Error = S::Error;
+    type Future = std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>,
+    >;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: Request<Body>) -> Self::Future {
+        let mut inner = self.inner.clone();
+        std::mem::swap(&mut inner, &mut self.inner);
+        Box::pin(async move {
+            let response = inner.call(request).await?;
+            if !response.status().is_success() {
+                return Ok(response); // already a failure; nothing to signal
+            }
+
+            // Only ever applied on the paid path, which is a single
+            // request/response tool call — so buffering here doesn't stall a
+            // long-lived stream.
+            let (mut parts, body) = response.into_parts();
+            let bytes = match axum::body::to_bytes(body, 8 * 1024 * 1024).await {
+                Ok(bytes) => bytes,
+                Err(_) => return Ok(axum::response::Response::from_parts(parts, Body::empty())),
+            };
+
+            if body_reports_tool_failure(&bytes) {
+                let original = parts.status;
+                parts.status = axum::http::StatusCode::BAD_GATEWAY;
+                if let Ok(value) = axum::http::HeaderValue::from_str(original.as_str()) {
+                    parts.headers.insert(TOOL_FAILED_HEADER, value);
+                }
+            }
+            Ok(axum::response::Response::from_parts(parts, Body::from(bytes)))
+        })
+    }
+}
+
+/// Whether an MCP response reports a failed tool call.
+///
+/// Matches on the serialized body rather than parsing, because the same
+/// payload arrives either as bare JSON or wrapped in SSE `data:` frames
+/// depending on what the client negotiated. `isError` appears only in a tool
+/// result, so the match is specific enough.
+pub fn body_reports_tool_failure(body: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(body);
+    text.contains("\"isError\":true") || text.contains("\"isError\": true")
+}
+
 /// Routes each MCP request to either the free or the paid service.
 ///
 /// Both inner services are the same MCP service; `paid` is additionally
@@ -212,11 +373,12 @@ pub fn layer_from_env() -> Option<PaidLayer> {
 pub struct X402McpRouter<F, P> {
     free: F,
     paid: P,
+    nonces: NonceGuard,
 }
 
 impl<F, P> X402McpRouter<F, P> {
     pub fn new(free: F, paid: P) -> Self {
-        Self { free, paid }
+        Self { free, paid, nonces: NonceGuard::default() }
     }
 }
 
@@ -253,6 +415,7 @@ where
         let mut paid = self.paid.clone();
         std::mem::swap(&mut free, &mut self.free);
         std::mem::swap(&mut paid, &mut self.paid);
+        let nonces = self.nonces.clone();
 
         Box::pin(async move {
             // Only POST carries JSON-RPC. GET (SSE stream) and DELETE
@@ -292,7 +455,44 @@ where
             match priced {
                 Some((tool, price)) => {
                     tracing::debug!("x402: gating tools/call for `{tool}` (${price})");
-                    paid.call(request).await
+
+                    // Refuse a replayed payment rather than doing — and
+                    // settling — the same work twice.
+                    if let Some(nonce) = request
+                        .headers()
+                        .get("x-payment")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(payment_nonce)
+                        && !nonces.claim(&nonce)
+                    {
+                        tracing::warn!("x402: refusing replayed payment nonce for `{tool}`");
+                        return Ok(axum::response::IntoResponse::into_response((
+                            axum::http::StatusCode::CONFLICT,
+                            axum::Json(serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": serde_json::Value::Null,
+                                "error": {
+                                    "code": -32600,
+                                    "message": "this payment has already been used; \
+                                                retry with a fresh payment"
+                                }
+                            })),
+                        )));
+                    }
+
+                    let mut response = paid.call(request).await?;
+                    // Undo the 502 that McpFailureStatus used to stop
+                    // settlement, so the client sees the JSON-RPC error it
+                    // expects rather than a transport failure.
+                    if let Some(original) = response
+                        .headers_mut()
+                        .remove(TOOL_FAILED_HEADER)
+                        .and_then(|v| v.to_str().ok().and_then(|s| s.parse::<u16>().ok()))
+                        && let Ok(status) = axum::http::StatusCode::from_u16(original)
+                    {
+                        *response.status_mut() = status;
+                    }
+                    Ok(response)
                 }
                 None => free.call(request).await,
             }
@@ -444,5 +644,82 @@ mod batch_tests {
     #[test]
     fn an_empty_batch_is_free() {
         assert_eq!(priced_tool_in_body(b"[]"), None);
+    }
+}
+
+#[cfg(test)]
+mod gap_tests {
+    use super::*;
+    use base64::Engine as _;
+
+    fn header_for(payload: serde_json::Value) -> String {
+        base64::engine::general_purpose::STANDARD.encode(payload.to_string())
+    }
+
+    #[test]
+    fn a_nonce_is_admitted_once_and_refused_after() {
+        let guard = NonceGuard::default();
+        assert!(guard.claim("abc"), "first use must be admitted");
+        assert!(!guard.claim("abc"), "replay must be refused");
+        assert!(guard.claim("def"), "a different nonce is unaffected");
+    }
+
+    /// Concurrent retries must not both slip through — the same race the
+    /// credit ledger guards against, and the one that would double-charge.
+    #[test]
+    fn concurrent_claims_admit_exactly_one() {
+        let guard = NonceGuard::default();
+        let admitted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        std::thread::scope(|scope| {
+            for _ in 0..32 {
+                let guard = guard.clone();
+                let admitted = admitted.clone();
+                scope.spawn(move || {
+                    if guard.claim("same-nonce") {
+                        admitted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                });
+            }
+        });
+        assert_eq!(
+            admitted.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "exactly one of 32 concurrent claims may be admitted"
+        );
+    }
+
+    #[test]
+    fn nonce_is_extracted_from_a_payment_header() {
+        let header = header_for(serde_json::json!({
+            "x402Version": 1,
+            "payload": {"authorization": {"nonce": "0xdeadbeef", "from": "0xabc"}}
+        }));
+        assert_eq!(payment_nonce(&header).as_deref(), Some("0xdeadbeef"));
+    }
+
+    /// Unparseable headers yield no nonce, and the caller proceeds — refusing
+    /// every payment we can't read would break paying clients, and x402 still
+    /// rejects a genuinely replayed payment on-chain.
+    #[test]
+    fn unreadable_payment_headers_yield_no_nonce() {
+        for bad in ["", "not-base64!!", &header_for(serde_json::json!({"no": "nonce"}))] {
+            assert_eq!(payment_nonce(bad), None, "should not find a nonce in {bad:?}");
+        }
+    }
+
+    #[test]
+    fn tool_failure_is_detected_in_json_and_sse_framing() {
+        let failed = br#"{"jsonrpc":"2.0","id":1,"result":{"isError":true,"content":[]}}"#;
+        assert!(body_reports_tool_failure(failed));
+
+        let sse = b"event: message\ndata: {\"result\":{\"isError\": true}}\n\n";
+        assert!(body_reports_tool_failure(sse), "SSE framing must be detected too");
+    }
+
+    #[test]
+    fn successful_results_are_not_mistaken_for_failures() {
+        let ok = br#"{"jsonrpc":"2.0","id":1,"result":{"isError":false,"content":[]}}"#;
+        assert!(!body_reports_tool_failure(ok));
+        assert!(!body_reports_tool_failure(br#"{"result":{"tools":[]}}"#));
     }
 }

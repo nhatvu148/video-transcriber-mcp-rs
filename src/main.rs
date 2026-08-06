@@ -188,7 +188,12 @@ async fn run_http_transport(host: &str, port: u16) -> Result<()> {
     );
     let mcp_router: axum::Router = match x402_mcp::layer_from_env() {
         Some(layer) => {
-            let paid = tower::Layer::layer(&layer, mcp_service.clone());
+            // McpFailureStatus sits *under* the payment layer so a failed
+            // tool call reads as non-2xx there and settlement is skipped.
+            let paid = tower::Layer::layer(
+                &layer,
+                x402_mcp::McpFailureStatus::new(mcp_service.clone()),
+            );
             axum::Router::new()
                 .fallback_service(x402_mcp::X402McpRouter::new(mcp_service, paid))
         }
