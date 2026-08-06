@@ -13,6 +13,12 @@ jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    # Targets flagged `experimental` are allowed to fail without blocking the
+    # release. Used for aarch64-unknown-linux-gnu, where whisper.cpp does not
+    # currently compile (see issue #13) — the failure stays visible in the run
+    # rather than being hidden, but one broken target no longer withholds the
+    # working artifacts for every other platform.
+    continue-on-error: ${{ matrix.experimental || false }}
     strategy:
       fail-fast: false
       matrix:
@@ -36,10 +42,14 @@ jobs:
             use_cross: false
 
           # Linux ARM64 (cross-compile)
+          # Experimental: whisper.cpp's ggml-cpu NEON path fails to build for
+          # ARM64 under the toolchain `cross` uses (issue #13). Marked so a
+          # failure here doesn't withhold the other platforms' binaries.
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             binary: video-transcriber-mcp
             use_cross: true
+            experimental: true
 
           # Windows
           - os: windows-latest

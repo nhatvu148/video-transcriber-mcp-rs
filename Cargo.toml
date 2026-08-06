@@ -7,7 +7,15 @@ keywords = ["whisper", "transcription", "mcp", "video", "audio"]
 license = "MIT"
 name = "video-transcriber-mcp"
 repository = "https://github.com/nhatvu148/video-transcriber-mcp-rs"
-version = "0.8.0"
+version = "0.9.0"
+
+# Keep the JWT test keys out of the published crate. They are throwaway
+# fixtures with no access to anything, but crates.io is public and permanent,
+# and files named `*-private.pem` sitting in a published package trip secret
+# scanners and alarm anyone auditing their dependency tree. `jwt_verify.rs`
+# goes with them since it can't run without its fixtures — both stay in git,
+# where the tests are actually run from.
+exclude = ["tests/fixtures/", "tests/jwt_verify.rs"]
 
 [[bin]]
 name = "video-transcriber-mcp"
