@@ -79,7 +79,11 @@ sqlx = {version = "0.9", default-features = false, features = ["runtime-tokio", 
 # reach it, since MCP puts every method behind one POST route.
 x402-axum = "2.0.2"
 x402-types = "2.0.2"
-x402-chain-eip155 = "2.0.2"
+# `server` is required: the crate defaults to no features, and
+# `V1Eip155Exact::price_tag` lives behind `#[cfg(feature = "server")]`.
+# Without it the constructor simply doesn't exist and the build fails with a
+# confusing "no associated function" error.
+x402-chain-eip155 = {version = "2.0.2", features = ["server"]}
 alloy-primitives = "1"
 tower = "0.5.3"
 tower_governor = "0.8"

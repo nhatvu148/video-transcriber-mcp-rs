@@ -41,6 +41,15 @@ use axum::body::Body;
 use axum::http::Request;
 use tower::Service;
 
+use std::sync::Arc;
+
+use alloy_primitives::Address;
+use x402_axum::facilitator_client::FacilitatorClient;
+use x402_axum::{StaticPriceTags, X402LayerBuilder, X402Middleware};
+// KnownNetworkEip155 is what puts `USDC::base_sepolia()` in scope.
+use x402_chain_eip155::{KnownNetworkEip155, V1Eip155Exact};
+use x402_types::networks::USDC;
+
 
 
 /// Tools that cost money to serve, with their price in whole USD.
@@ -85,6 +94,61 @@ pub fn priced_tool_in_body(body: &[u8]) -> Option<(&'static str, &'static str)> 
     priced_tool_entry(tool)
 }
 
+
+
+/// Default price, matching the smallest credit pack's per-transcription rate.
+pub const DEFAULT_PRICE_USD: &str = "0.20";
+/// Public testnet facilitator.
+pub const DEFAULT_FACILITATOR: &str = "https://facilitator.x402.rs";
+
+/// The concrete layer type produced by [`layer_from_env`].
+pub type PaidLayer =
+    X402LayerBuilder<StaticPriceTags<x402_types::proto::v1::PriceTag>, Arc<FacilitatorClient>>;
+
+/// Builds the x402 layer from the environment, or `None` when payment is off.
+///
+/// Disabled unless `X402_PAY_TO` is set, so existing deployments are
+/// unaffected until an operator opts in. Testnet is the default: reaching real
+/// money takes an explicit `X402_NETWORK=base`, so a misconfiguration fails
+/// toward play money rather than toward charging someone.
+pub fn layer_from_env() -> Option<PaidLayer> {
+    let pay_to = std::env::var("X402_PAY_TO").ok().filter(|v| !v.trim().is_empty())?;
+    let pay_to: Address = match pay_to.trim().parse() {
+        Ok(address) => address,
+        Err(e) => {
+            tracing::error!("X402_PAY_TO is not a valid address ({e}) — MCP payments stay disabled");
+            return None;
+        }
+    };
+
+    let price = std::env::var("X402_PRICE_USD").unwrap_or_else(|_| DEFAULT_PRICE_USD.to_string());
+    let mainnet = std::env::var("X402_NETWORK").map(|n| n.trim() == "base").unwrap_or(false);
+    let facilitator =
+        std::env::var("X402_FACILITATOR").unwrap_or_else(|_| DEFAULT_FACILITATOR.to_string());
+
+    let usdc = if mainnet { USDC::base() } else { USDC::base_sepolia() };
+    let amount = match usdc.parse(price.as_str()) {
+        Ok(amount) => amount,
+        Err(e) => {
+            tracing::error!("X402_PRICE_USD `{price}` is invalid ({e}) — MCP payments stay disabled");
+            return None;
+        }
+    };
+
+    tracing::info!(
+        "MCP payments ON: ${price} per priced tool call on {}, paid to {pay_to}",
+        if mainnet { "Base MAINNET (real funds)" } else { "Base Sepolia (testnet)" }
+    );
+
+    Some(
+        X402Middleware::new(facilitator.as_str())
+            // Transcription is slow and expensive: verify the payment up front,
+            // but only move funds once the work succeeded, so a failed job
+            // doesn't bill the caller.
+            .settle_after_execution()
+            .with_price_tag(V1Eip155Exact::price_tag(pay_to, amount)),
+    )
+}
 
 /// Routes each MCP request to either the free or the paid service.
 ///
