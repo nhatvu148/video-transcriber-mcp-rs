@@ -312,6 +312,11 @@ fn find_nonce(value: &serde_json::Value) -> Option<String> {
 /// Header used to carry a tool failure past the payment layer.
 const TOOL_FAILED_HEADER: &str = "x-mcp-tool-failed";
 
+/// Largest response body inspected for a tool failure. Generous, because
+/// transcripts with word-level timestamps are large and losing one would be
+/// worse than mis-settling it.
+const MAX_INSPECTABLE_RESPONSE: usize = 64 * 1024 * 1024;
+
 /// Re-stamps an MCP tool failure as 502 so the payment layer above skips
 /// settlement. The router restores the real status afterwards.
 #[derive(Clone)]
@@ -350,20 +355,52 @@ where
                 return Ok(response); // already a failure; nothing to signal
             }
 
+            // A response too big to inspect must still reach the caller:
+            // discarding a completed transcript to protect a billing decision
+            // is a far worse trade than occasionally settling one we couldn't
+            // check. Where Content-Length tells us up front that it won't fit,
+            // pass it through untouched and let it settle.
+            let too_large = response
+                .headers()
+                .get(axum::http::header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<usize>().ok())
+                .is_some_and(|len| len > MAX_INSPECTABLE_RESPONSE);
+            if too_large {
+                tracing::warn!(
+                    "x402: response too large to inspect; delivering it and allowing settlement"
+                );
+                return Ok(response);
+            }
+
             // Only ever applied on the paid path, which is a single
             // request/response tool call — so buffering here doesn't stall a
             // long-lived stream.
             let (mut parts, body) = response.into_parts();
-            let bytes = match axum::body::to_bytes(body, 8 * 1024 * 1024).await {
+            let bytes = match axum::body::to_bytes(body, MAX_INSPECTABLE_RESPONSE).await {
                 Ok(bytes) => bytes,
-                // Keeping the 200 here would show the client a successful
-                // call with no content *and* let the payment settle. Say it
-                // failed, which also stops settlement upstream.
+                // Only reachable for a chunked response with no
+                // Content-Length that outgrows the cap mid-stream. The body
+                // is already consumed and unrecoverable, so this is the one
+                // case where content is genuinely lost — report it as a
+                // failure so settlement is skipped and the caller isn't
+                // charged for something they didn't receive.
                 Err(_) => {
                     parts.status = axum::http::StatusCode::BAD_GATEWAY;
+                    parts.headers.remove(axum::http::header::CONTENT_LENGTH);
                     return Ok(axum::response::Response::from_parts(
                         parts,
-                        Body::from("response too large to return"),
+                        Body::from(
+                            serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": serde_json::Value::Null,
+                                "error": {
+                                    "code": -32603,
+                                    "message": "response exceeded the inspectable size limit"
+                                }
+                            })
+                            .to_string(),
+                        ),
                     ));
                 }
             };
@@ -528,7 +565,18 @@ where
                     }
 
                     let claimed = claimed_nonce.clone();
-                    let mut response = paid.call(request).await?;
+                    // Not `?`: a transport-level error would skip the release
+                    // below and hold the nonce for the full TTL, so a
+                    // legitimate retry would be rejected as a replay.
+                    let mut response = match paid.call(request).await {
+                        Ok(response) => response,
+                        Err(e) => {
+                            if let Some(nonce) = claimed.as_deref() {
+                                nonces.release(nonce);
+                            }
+                            return Err(e);
+                        }
+                    };
                     // Undo the 502 that McpFailureStatus used to stop
                     // settlement, so the client sees the JSON-RPC error it
                     // expects rather than a transport failure.
