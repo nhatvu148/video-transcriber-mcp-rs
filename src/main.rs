@@ -2,7 +2,10 @@ use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use rmcp::{
     ServiceExt,
-    transport::{stdio, streamable_http_server::StreamableHttpService},
+    transport::{
+        stdio,
+        streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService},
+    },
 };
 use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
@@ -138,11 +141,42 @@ async fn run_http_transport(host: &str, port: u16) -> Result<()> {
 
     tracing::info!("Starting Streamable HTTP transport on {}:{}...", host, port);
 
+    // The streamable-HTTP transport only answers for hosts on this list —
+    // rmcp's DNS-rebinding protection, which defaults to loopback. That means
+    // a deployed instance 403s requests carrying its own public hostname, so
+    // no remote MCP client can reach `/mcp` (issue #14).
+    //
+    // `MCP_ALLOWED_HOSTS` (comma-separated) names the hostnames this
+    // deployment should answer for. Additive on top of loopback so local dev
+    // and health checks keep working, and opt-in with no wildcard — the
+    // rebinding protection stays on unless an operator says which hosts to
+    // expect.
+    // Start from rmcp's own defaults and extend them, rather than re-declaring
+    // the loopback list here — that way an rmcp upgrade that changes the
+    // built-in defaults carries through instead of silently diverging.
+    let mut mcp_config = StreamableHttpServerConfig::default();
+    let configured: Vec<String> = std::env::var("MCP_ALLOWED_HOSTS")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|host| !host.is_empty())
+        .map(str::to_string)
+        .collect();
+    if configured.is_empty() {
+        tracing::info!(
+            "MCP transport accepting default hosts only ({}) — set MCP_ALLOWED_HOSTS to serve remote clients",
+            mcp_config.allowed_hosts.join(", ")
+        );
+    } else {
+        tracing::info!("MCP transport also accepting Host: {}", configured.join(", "));
+        mcp_config.allowed_hosts.extend(configured);
+    }
+
     // MCP service (per-session VideoTranscriberServer)
     let mcp_service = StreamableHttpService::new(
         || Ok(VideoTranscriberServer::new()),
         LocalSessionManager::default().into(),
-        Default::default(),
+        mcp_config,
     );
 
     // Supabase JWKS cache for verifying user auth tokens. Falls back to a

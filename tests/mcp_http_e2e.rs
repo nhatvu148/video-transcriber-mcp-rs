@@ -29,6 +29,12 @@ struct HttpServer {
 
 impl HttpServer {
     async fn start() -> Self {
+        Self::start_with_env(&[]).await
+    }
+
+    /// Same, but with extra environment variables set on the child — used to
+    /// exercise `MCP_ALLOWED_HOSTS`.
+    async fn start_with_env(env: &[(&str, &str)]) -> Self {
         // Ask the OS for a free port, then hand it to the child. There is a
         // small race between releasing and rebinding, but it keeps tests
         // independent so they can run in parallel.
@@ -47,6 +53,7 @@ impl HttpServer {
             // real DATABASE_URL exported: these tests must never touch a
             // production ledger.
             .env_remove("DATABASE_URL")
+            .envs(env.iter().copied())
             .spawn()
             .expect("failed to spawn the MCP server binary");
 
@@ -289,4 +296,109 @@ async fn mounts_the_rest_api_alongside_the_mcp_endpoint() {
         reqwest::StatusCode::METHOD_NOT_ALLOWED,
         "expected /api/jobs to exist as a POST-only route"
     );
+}
+
+/// rmcp refuses requests whose `Host` header isn't on its allowlist — DNS
+/// rebinding protection that defaults to loopback only. A deployed instance
+/// therefore 403s its own public hostname, which is what kept remote MCP
+/// clients out of the Fly deployment (issue #14).
+#[tokio::test]
+async fn rejects_a_foreign_host_header_by_default() {
+    let server = HttpServer::start().await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{}/mcp", server.base))
+        .header("content-type", "application/json")
+        .header("accept", ACCEPT)
+        // Reaches the server over loopback, but claims to be someone else —
+        // exactly the shape of a DNS-rebinding attempt.
+        .header("host", "evil.example.test")
+        .body(initialize_body())
+        .send()
+        .await
+        .expect("request with a foreign Host");
+
+    assert_eq!(
+        response.status(),
+        reqwest::StatusCode::FORBIDDEN,
+        "an unlisted Host must be refused"
+    );
+}
+
+/// …and naming the host in MCP_ALLOWED_HOSTS lets it through, which is what
+/// makes a deployed `/mcp` reachable.
+#[tokio::test]
+async fn accepts_a_host_named_in_mcp_allowed_hosts() {
+    let server =
+        HttpServer::start_with_env(&[("MCP_ALLOWED_HOSTS", "mcp.example.test,other.example.test")])
+            .await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{}/mcp", server.base))
+        .header("content-type", "application/json")
+        .header("accept", ACCEPT)
+        .header("host", "mcp.example.test")
+        .body(initialize_body())
+        .send()
+        .await
+        .expect("request with an allowed Host");
+
+    assert!(
+        response.status().is_success(),
+        "a configured Host must be accepted, got {}",
+        response.status()
+    );
+    assert!(
+        response.headers().contains_key("mcp-session-id"),
+        "a successful initialize must still open a session"
+    );
+}
+
+/// The allowlist is additive: configuring public hostnames must not lock out
+/// loopback, or local development and health checks break.
+#[tokio::test]
+async fn still_accepts_loopback_when_hosts_are_configured() {
+    let server =
+        HttpServer::start_with_env(&[("MCP_ALLOWED_HOSTS", "mcp.example.test")]).await;
+
+    // open_session() talks to 127.0.0.1 with the default Host header.
+    let (session, init) = server.open_session().await;
+    assert!(!session.is_empty());
+    assert_eq!(init["protocolVersion"], PROTOCOL);
+}
+
+/// An unlisted host stays refused even once others are configured — the
+/// protection must narrow, never widen to "anything goes".
+#[tokio::test]
+async fn configuring_hosts_does_not_allow_every_host() {
+    let server =
+        HttpServer::start_with_env(&[("MCP_ALLOWED_HOSTS", "mcp.example.test")]).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{}/mcp", server.base))
+        .header("content-type", "application/json")
+        .header("accept", ACCEPT)
+        .header("host", "evil.example.test")
+        .body(initialize_body())
+        .send()
+        .await
+        .expect("request with an unlisted Host");
+
+    assert_eq!(
+        response.status(),
+        reqwest::StatusCode::FORBIDDEN,
+        "hosts outside the configured list must still be refused"
+    );
+}
+
+fn initialize_body() -> String {
+    json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {
+            "protocolVersion": PROTOCOL,
+            "capabilities": {},
+            "clientInfo": {"name": "e2e", "version": "1"},
+        }
+    })
+    .to_string()
 }
