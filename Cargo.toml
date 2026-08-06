@@ -18,34 +18,37 @@ anyhow = "1.0"
 async-process = "2.5"
 axum = {version = "0.8.9", features = ["multipart"]}
 chrono = "0.4"
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 home = "0.5"
 # Deterministic pre-pass that repairs the most common structural mistakes in
 # LLM-generated Mermaid before it's stored (see sanitize_mermaid in llm.rs).
 regex = "1"
 reqwest = {version = "0.13", features = ["json", "multipart", "form", "rustls"], default-features = false}
-rmcp = {version = "1.7", features = ["server", "transport-io", "transport-streamable-http-server"]}
+rmcp = {version = "3.1", features = ["server", "transport-io", "transport-streamable-http-server"]}
 serde = {version = "1.0", features = ["derive"]}
 serde_json = "1.0"
 tempfile = "3.27"
 thiserror = "2.0"
-tokio = {version = "1.52", features = ["full"]}
+tokio = {version = "1.53", features = ["full"]}
 tokio-util = "0.7"
-hmac = "0.12"
-sha2 = "0.10"
+hmac = "0.13"
+sha2 = "0.11"
 # JWT verification for Supabase Auth — used by the auth middleware to validate
 # tokens from the web/extension before crediting any operation.
-jsonwebtoken = "9"
+jsonwebtoken = "11"
 # Postgres-backed credit ledger (Supabase) when DATABASE_URL is set; falls back
 # to the JSON-on-disk store for standalone/forked deployments without a DB.
 # rustls (not native-tls) to match reqwest and avoid an OpenSSL build dep.
-sqlx = {version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres"]}
+# sqlx 0.9 split the old `runtime-tokio-rustls` feature into a runtime and a TLS
+# feature; `tls-rustls-ring` pins the same ring backend reqwest already links,
+# so we don't drag in a second rustls crypto provider.
+sqlx = {version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "json"]}
 tower = "0.5.3"
 tower_governor = "0.8"
 tower-http = {version = "0.7", features = ["cors", "trace"]}
 tracing = "0.1"
 tracing-subscriber = {version = "0.3", features = ["env-filter"]}
-uuid = {version = "1.23", features = ["v4", "serde"]}
+uuid = {version = "1.24", features = ["v4", "serde"]}
 walkdir = "2.5"
 
 # Metal GPU acceleration on macOS (Apple Silicon). On other platforms we fall
@@ -57,7 +60,7 @@ whisper-rs = {version = "0.16", features = ["metal"]}
 whisper-rs = "0.16"
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8"
 
 [profile.release]
 codegen-units = 1

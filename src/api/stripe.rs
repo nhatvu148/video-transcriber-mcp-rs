@@ -20,7 +20,9 @@ use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
 };
-use hmac::{Hmac, Mac};
+// hmac 0.13 moved `new_from_slice` off `Mac` and onto `KeyInit`, so both
+// traits have to be in scope now.
+use hmac::{Hmac, KeyInit, Mac};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::Sha256;
