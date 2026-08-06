@@ -381,6 +381,32 @@ All environment variables are optional. The transcriber works with none of them 
 
 > 💡 The transcript **output directory** is not an env var — pass `output_dir` to the `transcribe_video` tool (defaults to `~/Downloads/video-transcripts`). Output files are named `<video_id>-<title>.{txt,json,md}`.
 
+#### Remote MCP access (`--transport http`)
+
+The HTTP transport only answers requests whose `Host` header is on an
+allowlist. It defaults to loopback (`localhost`, `127.0.0.1`, `::1`) as
+protection against [DNS rebinding][dns-rebinding], which means a deployed
+instance rejects its own public hostname with `403` until you name it:
+
+```bash
+# Comma-separated. Added on top of the loopback defaults, so local
+# development and health checks keep working.
+export MCP_ALLOWED_HOSTS=mcp.example.com,mcp.example.com:8080
+
+# On Fly:
+fly secrets set MCP_ALLOWED_HOSTS=your-app.fly.dev
+```
+
+Leave it unset for local use — the server logs which hosts it accepts at
+startup, so a `403` from a remote client is easy to diagnose.
+
+> ⚠️ This controls **reachability, not authorization**. Anyone who can reach
+> the URL can call the tools, including `transcribe_video`, which spends real
+> money when remote Whisper / OpenRouter are configured. Put an
+> authenticating proxy in front of a public deployment.
+
+[dns-rebinding]: https://en.wikipedia.org/wiki/DNS_rebinding
+
 #### Downloading (yt-dlp cookies)
 
 Needed only for age-restricted / members-only videos or YouTube's "Sign in to confirm you're not a bot" challenge.

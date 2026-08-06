@@ -151,8 +151,10 @@ async fn run_http_transport(host: &str, port: u16) -> Result<()> {
     // and health checks keep working, and opt-in with no wildcard — the
     // rebinding protection stays on unless an operator says which hosts to
     // expect.
-    let mut allowed_hosts: Vec<String> =
-        vec!["localhost".into(), "127.0.0.1".into(), "::1".into()];
+    // Start from rmcp's own defaults and extend them, rather than re-declaring
+    // the loopback list here — that way an rmcp upgrade that changes the
+    // built-in defaults carries through instead of silently diverging.
+    let mut mcp_config = StreamableHttpServerConfig::default();
     let configured: Vec<String> = std::env::var("MCP_ALLOWED_HOSTS")
         .unwrap_or_default()
         .split(',')
@@ -162,18 +164,19 @@ async fn run_http_transport(host: &str, port: u16) -> Result<()> {
         .collect();
     if configured.is_empty() {
         tracing::info!(
-            "MCP transport accepting loopback hosts only — set MCP_ALLOWED_HOSTS to serve remote clients"
+            "MCP transport accepting default hosts only ({}) — set MCP_ALLOWED_HOSTS to serve remote clients",
+            mcp_config.allowed_hosts.join(", ")
         );
     } else {
         tracing::info!("MCP transport also accepting Host: {}", configured.join(", "));
-        allowed_hosts.extend(configured);
+        mcp_config.allowed_hosts.extend(configured);
     }
 
     // MCP service (per-session VideoTranscriberServer)
     let mcp_service = StreamableHttpService::new(
         || Ok(VideoTranscriberServer::new()),
         LocalSessionManager::default().into(),
-        StreamableHttpServerConfig::default().with_allowed_hosts(allowed_hosts),
+        mcp_config,
     );
 
     // Supabase JWKS cache for verifying user auth tokens. Falls back to a
