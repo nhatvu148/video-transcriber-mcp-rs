@@ -89,7 +89,14 @@ class Server:
         except Exception:
             pass
         self.proc.terminate()
-        self.proc.wait(timeout=10)
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            # A server that ignores SIGTERM must not turn a clean failure
+            # report into a traceback — close() runs in a finally block, so an
+            # exception here would replace the error we're trying to report.
+            self.proc.kill()
+            self.proc.wait()
 
 
 def main():

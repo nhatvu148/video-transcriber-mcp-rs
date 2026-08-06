@@ -80,7 +80,14 @@ class Server:
         except Exception:
             pass
         self.proc.terminate()
-        self.proc.wait(timeout=10)
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            # More likely to bite here than in the smoke test: whisper.cpp
+            # inference is a long CPU-bound stretch, so at cleanup time the
+            # process may still be busy and slow to honour SIGTERM.
+            self.proc.kill()
+            self.proc.wait()
 
 
 def make_clip(workdir):
