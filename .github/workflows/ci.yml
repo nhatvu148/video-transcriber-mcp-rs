@@ -1,0 +1,104 @@
+name: CI
+
+# release.yml only fires on `v*` tags, so before this workflow existed nothing
+# validated a pull request. Everything here runs without secrets or paid
+# services: the MCP suites drive the real binary over stdio and HTTP, and the
+# credit-ledger suite runs against a throwaway Postgres service container.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push supersedes an in-flight run on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: Test (linux + postgres)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: credits_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Switches tests/credits_pg.rs from "skip" to "run" — this is what keeps
+      # the sqlx call sites (the money path) covered.
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/credits_test
+      # Keep the file-backed fallback out of the checkout so no test can write
+      # a credits.json into the working tree. (Literal path rather than
+      # `runner.temp`: the `runner` context isn't available in job-level env.)
+      CREDITS_DB_PATH: /tmp/credits-ci.json
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # whisper.cpp is a C++ build; caching it is the difference between a
+      # ~2 minute run and a ~10 minute one.
+      - name: Cache cargo + build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --all-targets
+
+      - name: Confirm the Postgres suite actually ran
+        # These tests skip silently when DATABASE_URL is unset. A broken
+        # service container would therefore look like a green build, so assert
+        # the ledger tests really executed against Postgres.
+        run: |
+          output=$(cargo test --test credits_pg -- --nocapture 2>&1)
+          echo "$output"
+          if echo "$output" | grep -q "skipping: DATABASE_URL not set"; then
+            echo "::error::credit ledger tests skipped — the Postgres service is not reachable"
+            exit 1
+          fi
+
+  check:
+    # Linux is covered by the `test` job. This catches platform-specific
+    # breakage (the whisper-rs metal path on macOS, MSVC on Windows) on a PR
+    # rather than after a release tag is already pushed.
+    name: Check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      # `check` rather than `build`: it catches the type and platform errors
+      # we care about without paying for codegen on three OSes.
+      - name: Check
+        run: cargo check --all-targets

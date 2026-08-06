@@ -899,20 +899,19 @@ pub async fn upload_job(
         .get(axum::http::header::CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u64>().ok())
+        && len > super::UPLOAD_MAX_BYTES as u64
     {
-        if len > super::UPLOAD_MAX_BYTES as u64 {
-            return (
-                StatusCode::PAYLOAD_TOO_LARGE,
-                Json(json!({
-                    "error": format!(
-                        "File too large: {:.2} GB. The upload limit is 2 GB — \
-                         extract the audio (e.g. `ffmpeg -i input -vn -ac 1 -ar \
-                         16000 audio.mp3`) and upload that instead.",
-                        len as f64 / (1024.0 * 1024.0 * 1024.0)
-                    )
-                })),
-            );
-        }
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({
+                "error": format!(
+                    "File too large: {:.2} GB. The upload limit is 2 GB — \
+                     extract the audio (e.g. `ffmpeg -i input -vn -ac 1 -ar \
+                     16000 audio.mp3`) and upload that instead.",
+                    len as f64 / (1024.0 * 1024.0 * 1024.0)
+                )
+            })),
+        );
     }
 
     // Reserve credit BEFORE accepting the upload — refusing late wastes the
@@ -1103,6 +1102,10 @@ fn server_error(msg: &str) -> (StatusCode, Json<Value>) {
 /// cleanly, so a local-whisper job that's mid-transcription will finish its
 /// compute before we mark the job cancelled. The status flip still happens,
 /// so the client correctly sees Cancelled rather than Complete.
+// One argument over clippy's default threshold. Grouping them into a struct
+// would just move the same fields behind a name used at exactly one call site,
+// so the lint is silenced rather than obeyed.
+#[allow(clippy::too_many_arguments)]
 async fn run_with_cancel(
     job_id: Uuid,
     req: JobRequest,

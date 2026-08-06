@@ -20,7 +20,9 @@ use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
 };
-use hmac::{Hmac, Mac};
+// hmac 0.13 moved `new_from_slice` off `Mac` and onto `KeyInit`, so both
+// traits have to be in scope now.
+use hmac::{Hmac, KeyInit, Mac};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::Sha256;
@@ -339,4 +341,91 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         diff |= x ^ y;
     }
     diff == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Vector generated independently with Python's `hmac`/`hashlib` rather
+    // than with the `hmac` crate, so this asserts interoperability with
+    // Stripe's signing rather than just re-deriving whatever our own
+    // dependency happens to produce. Regenerate with:
+    //
+    //   python3 -c 'import hmac,hashlib;print(hmac.new(SECRET, TS+b"."+BODY, hashlib.sha256).hexdigest())'
+    const SECRET: &[u8] = b"whsec_test_secret_do_not_use";
+    const TS: &str = "1718000000";
+    const BODY: &[u8] = br#"{"id":"evt_test","type":"checkout.session.completed"}"#;
+    const SIG: &str = "d8d433ad7a88f06889c914755a92686379a18b18c2586ec1b6c785f4758730ad";
+    /// Same payload signed with a *different* secret — stands in for an
+    /// already-rotated-out signing key.
+    const SIG_OTHER: &str = "b2f71bab4c3f798a881348cf3f5721c6234527ad380325926d121c518b519d48";
+
+    #[test]
+    fn accepts_a_genuine_stripe_signature() {
+        let header = format!("t={TS},v1={SIG}");
+        assert!(verify_signature(SECRET, BODY, &header));
+    }
+
+    #[test]
+    fn rejects_a_signature_made_with_the_wrong_secret() {
+        let header = format!("t={TS},v1={SIG}");
+        assert!(!verify_signature(b"whsec_not_our_secret", BODY, &header));
+    }
+
+    #[test]
+    fn rejects_a_tampered_body() {
+        let header = format!("t={TS},v1={SIG}");
+        let tampered = br#"{"id":"evt_test","type":"checkout.session.expired"}"#;
+        assert!(!verify_signature(SECRET, tampered, &header));
+    }
+
+    #[test]
+    fn rejects_a_tampered_timestamp() {
+        // Timestamp is part of the signed payload, so changing it must
+        // invalidate an otherwise-good signature (replay protection).
+        let header = format!("t=1718009999,v1={SIG}");
+        assert!(!verify_signature(SECRET, BODY, &header));
+    }
+
+    #[test]
+    fn accepts_when_any_v1_entry_matches() {
+        // During secret rotation Stripe sends several `v1=` values; one
+        // match is enough.
+        let header = format!("t={TS},v1={SIG_OTHER},v1={SIG}");
+        assert!(verify_signature(SECRET, BODY, &header));
+    }
+
+    #[test]
+    fn rejects_when_no_v1_entry_matches() {
+        let header = format!("t={TS},v1={SIG_OTHER}");
+        assert!(!verify_signature(SECRET, BODY, &header));
+    }
+
+    #[test]
+    fn rejects_a_header_without_a_timestamp() {
+        let header = format!("v1={SIG}");
+        assert!(!verify_signature(SECRET, BODY, &header));
+    }
+
+    #[test]
+    fn rejects_malformed_and_empty_signature_values() {
+        // empty, non-hex, odd-length, and correct-hex-but-too-short
+        for bad in ["", "zzzz", "abc", &SIG[..30]] {
+            let header = format!("t={TS},v1={bad}");
+            assert!(
+                !verify_signature(SECRET, BODY, &header),
+                "should reject v1={bad:?}"
+            );
+        }
+        assert!(!verify_signature(SECRET, BODY, ""));
+    }
+
+    #[test]
+    fn ignores_unknown_scheme_entries() {
+        // Stripe adds `v0=` (and may add more) alongside `v1=`; unknown
+        // schemes must neither match nor break parsing.
+        let header = format!("t={TS},v0={SIG_OTHER},v1={SIG}");
+        assert!(verify_signature(SECRET, BODY, &header));
+    }
 }

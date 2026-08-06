@@ -33,7 +33,7 @@ impl VideoTranscriberServer {
 
 impl ServerHandler for VideoTranscriberServer {
     fn get_info(&self) -> ServerInfo {
-        // rmcp 1.x marks InitializeResult as #[non_exhaustive], so the
+        // rmcp marks InitializeResult as #[non_exhaustive], so the
         // `ServerInfo { instructions, capabilities, ..Default::default() }`
         // struct expression no longer compiles. Mutate a default instance
         // instead — same behaviour, allowed by the non_exhaustive rules.
@@ -52,195 +52,210 @@ impl ServerHandler for VideoTranscriberServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult {
-            tools: vec![
-                // rmcp 1.x marked Tool as #[non_exhaustive], so we construct
-                // via Tool::new(name, description, input_schema) instead of a
-                // struct expression. Cleaner anyway — drops a lot of
-                // `..: None` boilerplate per tool.
-                Tool::new(
-                    "transcribe_video",
-                    "Transcribe videos from 1000+ platforms (YouTube, Vimeo, TikTok, Twitter, etc.) or local video files using whisper.cpp (4-10x faster than Python whisper!). Downloads/extracts audio and generates transcript in TXT, JSON, and Markdown formats.",
-                    Arc::new(
-                        serde_json::from_value(json!({
-                            "type": "object",
-                            "properties": {
-                                "url": {
-                                    "type": "string",
-                                    "description": "Video URL from any supported platform OR absolute/relative path to a local video file (mp4, avi, mov, mkv, etc.)"
-                                },
-                                "output_dir": {
-                                    "type": "string",
-                                    "description": format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
-                                },
-                                "model": {
-                                    "type": "string",
-                                    "enum": ["tiny", "base", "small", "medium", "large"],
-                                    "description": "Whisper model to use. Larger models are more accurate but slower. Default: 'base'"
-                                },
-                                "language": {
-                                    "type": "string",
-                                    "description": "Language code (ISO 639-1: en, es, fr, de, etc.) or 'auto' for automatic detection. Default: 'auto'"
-                                }
+        // rmcp 3.x added SEP-2549/SEP-2322 fields (`result_type`, `ttl_ms`,
+        // `cache_scope`) to every paginated result, so build via the
+        // constructor rather than a struct expression — it fills in the
+        // spec-correct defaults (`result_type: COMPLETE`, no cursor, no
+        // cache hints) instead of us having to track them here.
+        Ok(ListToolsResult::with_all_items(vec![
+            // rmcp marks Tool as #[non_exhaustive], so we construct
+            // via Tool::new(name, description, input_schema) instead of a
+            // struct expression. Cleaner anyway — drops a lot of
+            // `..: None` boilerplate per tool.
+            Tool::new(
+                "transcribe_video",
+                "Transcribe videos from 1000+ platforms (YouTube, Vimeo, TikTok, Twitter, etc.) or local video files using whisper.cpp (4-10x faster than Python whisper!). Downloads/extracts audio and generates transcript in TXT, JSON, and Markdown formats.",
+                Arc::new(
+                    serde_json::from_value(json!({
+                        "type": "object",
+                        "properties": {
+                            "url": {
+                                "type": "string",
+                                "description": "Video URL from any supported platform OR absolute/relative path to a local video file (mp4, avi, mov, mkv, etc.)"
                             },
-                            "required": ["url"]
-                        }))
-                        .unwrap(),
-                    ),
-                ),
-                Tool::new(
-                    "check_dependencies",
-                    "Check if all required dependencies (yt-dlp, ffmpeg, whisper models) are installed",
-                    Arc::new(
-                        serde_json::from_value(json!({
-                            "type": "object",
-                            "properties": {}
-                        }))
-                        .unwrap(),
-                    ),
-                ),
-                Tool::new(
-                    "list_supported_sites",
-                    "List all video platforms supported by yt-dlp (1000+ sites including YouTube, Vimeo, TikTok, Twitter, Facebook, Instagram, educational platforms, and more)",
-                    Arc::new(
-                        serde_json::from_value(json!({
-                            "type": "object",
-                            "properties": {}
-                        }))
-                        .unwrap(),
-                    ),
-                ),
-                Tool::new(
-                    "list_transcripts",
-                    "List all available transcripts in the output directory, sorted by modification time (newest first)",
-                    Arc::new(
-                        serde_json::from_value(json!({
-                            "type": "object",
-                            "properties": {
-                                "output_dir": {
-                                    "type": "string",
-                                    "description": format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
-                                },
-                                "limit": {
-                                    "type": "number",
-                                    "description": "Optional limit on number of transcripts to return (newest first). If not specified, returns all transcripts."
-                                }
+                            "output_dir": {
+                                "type": "string",
+                                "description": format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
+                            },
+                            "model": {
+                                "type": "string",
+                                "enum": ["tiny", "base", "small", "medium", "large"],
+                                "description": "Whisper model to use. Larger models are more accurate but slower. Default: 'base'"
+                            },
+                            "language": {
+                                "type": "string",
+                                "description": "Language code (ISO 639-1: en, es, fr, de, etc.) or 'auto' for automatic detection. Default: 'auto'"
                             }
-                        }))
-                        .unwrap(),
-                    ),
+                        },
+                        "required": ["url"]
+                    }))
+                    .unwrap(),
                 ),
-                Tool::new(
-                    "search_transcripts",
-                    "Semantic search across ALL saved transcripts. Embeds the query and returns the most relevant passages (with source video + timestamp) from every transcribed video — far better than reading transcripts one by one. Requires transcripts saved with embeddings (set OPENROUTER_API_KEY when transcribing).",
-                    Arc::new(
-                        serde_json::from_value(json!({
-                            "type": "object",
-                            "properties": {
-                                "query": {
-                                    "type": "string",
-                                    "description": "What to search for across your transcripts"
-                                },
-                                "limit": {
-                                    "type": "number",
-                                    "description": "Max passages to return (default 8)"
-                                },
-                                "output_dir": {
-                                    "type": "string",
-                                    "description": format!("Optional transcripts directory. Defaults to {}", get_default_output_dir().display())
-                                }
+            ),
+            Tool::new(
+                "check_dependencies",
+                "Check if all required dependencies (yt-dlp, ffmpeg, whisper models) are installed",
+                Arc::new(
+                    serde_json::from_value(json!({
+                        "type": "object",
+                        "properties": {}
+                    }))
+                    .unwrap(),
+                ),
+            ),
+            Tool::new(
+                "list_supported_sites",
+                "List all video platforms supported by yt-dlp (1000+ sites including YouTube, Vimeo, TikTok, Twitter, Facebook, Instagram, educational platforms, and more)",
+                Arc::new(
+                    serde_json::from_value(json!({
+                        "type": "object",
+                        "properties": {}
+                    }))
+                    .unwrap(),
+                ),
+            ),
+            Tool::new(
+                "list_transcripts",
+                "List all available transcripts in the output directory, sorted by modification time (newest first)",
+                Arc::new(
+                    serde_json::from_value(json!({
+                        "type": "object",
+                        "properties": {
+                            "output_dir": {
+                                "type": "string",
+                                "description": format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
                             },
-                            "required": ["query"]
-                        }))
-                        .unwrap(),
-                    ),
-                ),
-                Tool::new(
-                    "get_latest_transcript",
-                    "Get the path and details of the most recently created/modified transcript. Useful to avoid accidentally reading old transcripts.",
-                    Arc::new(
-                        serde_json::from_value(json!({
-                            "type": "object",
-                            "properties": {
-                                "output_dir": {
-                                    "type": "string",
-                                    "description": format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
-                                }
+                            "limit": {
+                                "type": "number",
+                                "description": "Optional limit on number of transcripts to return (newest first). If not specified, returns all transcripts."
                             }
-                        }))
-                        .unwrap(),
-                    ),
+                        }
+                    }))
+                    .unwrap(),
                 ),
-                Tool::new(
-                    "delete_transcript",
-                    "Delete a specific transcript by video ID. This removes all associated files (txt, json, md).",
-                    Arc::new(
-                        serde_json::from_value(json!({
-                            "type": "object",
-                            "properties": {
-                                "video_id": {
-                                    "type": "string",
-                                    "description": "The video ID of the transcript to delete (e.g., 'dQw4w9WgXcQ')"
-                                },
-                                "output_dir": {
-                                    "type": "string",
-                                    "description": format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
-                                }
+            ),
+            Tool::new(
+                "search_transcripts",
+                "Semantic search across ALL saved transcripts. Embeds the query and returns the most relevant passages (with source video + timestamp) from every transcribed video — far better than reading transcripts one by one. Requires transcripts saved with embeddings (set OPENROUTER_API_KEY when transcribing).",
+                Arc::new(
+                    serde_json::from_value(json!({
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "What to search for across your transcripts"
                             },
-                            "required": ["video_id"]
-                        }))
-                        .unwrap(),
-                    ),
-                ),
-                Tool::new(
-                    "cleanup_old_transcripts",
-                    "Delete transcripts older than a specified number of days. Helps manage disk space.",
-                    Arc::new(
-                        serde_json::from_value(json!({
-                            "type": "object",
-                            "properties": {
-                                "days": {
-                                    "type": "number",
-                                    "description": "Delete transcripts older than this many days (e.g., 30 for month-old transcripts)"
-                                },
-                                "output_dir": {
-                                    "type": "string",
-                                    "description": format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
-                                }
+                            "limit": {
+                                "type": "number",
+                                "description": "Max passages to return (default 8)"
                             },
-                            "required": ["days"]
-                        }))
-                        .unwrap(),
-                    ),
+                            "output_dir": {
+                                "type": "string",
+                                "description": format!("Optional transcripts directory. Defaults to {}", get_default_output_dir().display())
+                            }
+                        },
+                        "required": ["query"]
+                    }))
+                    .unwrap(),
                 ),
-                Tool::new(
-                    "delete_all_transcripts",
-                    "Delete ALL transcripts in the output directory. Use with caution - this cannot be undone!",
-                    Arc::new(
-                        serde_json::from_value(json!({
-                            "type": "object",
-                            "properties": {
-                                "output_dir": {
-                                    "type": "string",
-                                    "description": format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
-                                },
-                                "confirm": {
-                                    "type": "boolean",
-                                    "description": "Must be set to true to confirm deletion of all transcripts"
-                                }
+            ),
+            Tool::new(
+                "get_latest_transcript",
+                "Get the path and details of the most recently created/modified transcript. Useful to avoid accidentally reading old transcripts.",
+                Arc::new(
+                    serde_json::from_value(json!({
+                        "type": "object",
+                        "properties": {
+                            "output_dir": {
+                                "type": "string",
+                                "description": format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
+                            }
+                        }
+                    }))
+                    .unwrap(),
+                ),
+            ),
+            Tool::new(
+                "delete_transcript",
+                "Delete a specific transcript by video ID. This removes all associated files (txt, json, md).",
+                Arc::new(
+                    serde_json::from_value(json!({
+                        "type": "object",
+                        "properties": {
+                            "video_id": {
+                                "type": "string",
+                                "description": "The video ID of the transcript to delete (e.g., 'dQw4w9WgXcQ')"
                             },
-                            "required": ["confirm"]
-                        }))
-                        .unwrap(),
-                    ),
+                            "output_dir": {
+                                "type": "string",
+                                "description": format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
+                            }
+                        },
+                        "required": ["video_id"]
+                    }))
+                    .unwrap(),
                 ),
-            ],
-            next_cursor: None,
-            meta: None,
-        })
+            ),
+            Tool::new(
+                "cleanup_old_transcripts",
+                "Delete transcripts older than a specified number of days. Helps manage disk space.",
+                Arc::new(
+                    serde_json::from_value(json!({
+                        "type": "object",
+                        "properties": {
+                            "days": {
+                                "type": "number",
+                                "description": "Delete transcripts older than this many days (e.g., 30 for month-old transcripts)"
+                            },
+                            "output_dir": {
+                                "type": "string",
+                                "description": format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
+                            }
+                        },
+                        "required": ["days"]
+                    }))
+                    .unwrap(),
+                ),
+            ),
+            Tool::new(
+                "delete_all_transcripts",
+                "Delete ALL transcripts in the output directory. Use with caution - this cannot be undone!",
+                Arc::new(
+                    serde_json::from_value(json!({
+                        "type": "object",
+                        "properties": {
+                            "output_dir": {
+                                "type": "string",
+                                "description": format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
+                            },
+                            "confirm": {
+                                "type": "boolean",
+                                "description": "Must be set to true to confirm deletion of all transcripts"
+                            }
+                        },
+                        "required": ["confirm"]
+                    }))
+                    .unwrap(),
+                ),
+            ),
+        ]))
     }
 
     async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        // rmcp 3.x widened the handler return type to `CallToolResponse`
+        // (SEP-2322 MRTR), which also models "input required" and "task
+        // created" outcomes. Every tool here completes in a single call, so
+        // dispatch as before and lift the `CallToolResult` into that enum.
+        self.dispatch_tool(request, context).await.map(Into::into)
+    }
+}
+
+impl VideoTranscriberServer {
+    async fn dispatch_tool(
         &self,
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
@@ -323,7 +338,7 @@ impl ServerHandler for VideoTranscriberServer {
                             result.word_count
                         );
 
-                        Ok(CallToolResult::success(vec![Content::text(text)]))
+                        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
                     }
                     Err(e) => Err(ErrorData::new(
                         ErrorCode::INTERNAL_ERROR,
@@ -338,7 +353,7 @@ impl ServerHandler for VideoTranscriberServer {
                 match transcriber.check_dependencies() {
                     Ok(status) => {
                         let text = format!("✅ Dependency Check:\n\n{}", status);
-                        Ok(CallToolResult::success(vec![Content::text(text)]))
+                        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
                     }
                     Err(e) => Err(ErrorData::new(
                         ErrorCode::INTERNAL_ERROR,
@@ -365,7 +380,7 @@ impl ServerHandler for VideoTranscriberServer {
                     **Total: 1000+ supported extractors**\n\n\
                     You can transcribe videos from any of these platforms!";
 
-                Ok(CallToolResult::success(vec![Content::text(text)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
             }
 
             "list_transcripts" => {
@@ -393,7 +408,7 @@ impl ServerHandler for VideoTranscriberServer {
                         "📂 No transcripts directory found at: {}\n\nTranscribe your first video to create it!",
                         output_dir.display()
                     );
-                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(text)]));
                 }
 
                 let mut video_groups: HashMap<String, Vec<String>> = HashMap::new();
@@ -419,7 +434,7 @@ impl ServerHandler for VideoTranscriberServer {
                         "📂 No transcripts found in {}\n\nTranscribe a video to get started!",
                         output_dir.display()
                     );
-                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(text)]));
                 }
 
                 // Collect video data with timestamps for sorting
@@ -513,7 +528,7 @@ impl ServerHandler for VideoTranscriberServer {
                     list_items.join("\n\n")
                 );
 
-                Ok(CallToolResult::success(vec![Content::text(text)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
             }
 
             "get_latest_transcript" => {
@@ -534,7 +549,7 @@ impl ServerHandler for VideoTranscriberServer {
                         "📂 No transcripts directory found at: {}\n\nTranscribe your first video to create it!",
                         output_dir.display()
                     );
-                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(text)]));
                 }
 
                 let mut video_groups: HashMap<String, Vec<String>> = HashMap::new();
@@ -560,7 +575,7 @@ impl ServerHandler for VideoTranscriberServer {
                         "📂 No transcripts found in {}\n\nTranscribe a video to get started!",
                         output_dir.display()
                     );
-                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(text)]));
                 }
 
                 // Find the most recent transcript
@@ -660,7 +675,7 @@ impl ServerHandler for VideoTranscriberServer {
                             file_paths
                         );
 
-                        Ok(CallToolResult::success(vec![Content::text(text)]))
+                        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
                     } else {
                         Err(ErrorData::new(
                             ErrorCode::INTERNAL_ERROR,
@@ -670,7 +685,7 @@ impl ServerHandler for VideoTranscriberServer {
                     }
                 } else {
                     let text = "📂 No transcripts found.".to_string();
-                    Ok(CallToolResult::success(vec![Content::text(text)]))
+                    Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
                 }
             }
 
@@ -705,7 +720,7 @@ impl ServerHandler for VideoTranscriberServer {
 
                 if !output_dir.exists() {
                     let text = "📂 No transcripts directory found.".to_string();
-                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(text)]));
                 }
 
                 // Find all files matching the video_id
@@ -725,7 +740,7 @@ impl ServerHandler for VideoTranscriberServer {
 
                 if deleted_files.is_empty() {
                     let text = format!("⚠️ No transcripts found for video ID: {}", video_id);
-                    Ok(CallToolResult::success(vec![Content::text(text)]))
+                    Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
                 } else {
                     let text = format!(
                         "🗑️ Deleted {} file(s) for video ID '{}':\n\n{}",
@@ -737,7 +752,7 @@ impl ServerHandler for VideoTranscriberServer {
                             .collect::<Vec<_>>()
                             .join("\n")
                     );
-                    Ok(CallToolResult::success(vec![Content::text(text)]))
+                    Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
                 }
             }
 
@@ -770,7 +785,7 @@ impl ServerHandler for VideoTranscriberServer {
 
                 if !output_dir.exists() {
                     let text = "📂 No transcripts directory found.".to_string();
-                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(text)]));
                 }
 
                 let cutoff_time = SystemTime::now() - Duration::from_secs(days * 24 * 60 * 60);
@@ -792,7 +807,7 @@ impl ServerHandler for VideoTranscriberServer {
 
                 if deleted_files.is_empty() {
                     let text = format!("✅ No transcripts older than {} days found.", days);
-                    Ok(CallToolResult::success(vec![Content::text(text)]))
+                    Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
                 } else {
                     let text = format!(
                         "🗑️ Deleted {} file(s) older than {} days:\n\n{}",
@@ -804,7 +819,7 @@ impl ServerHandler for VideoTranscriberServer {
                             .collect::<Vec<_>>()
                             .join("\n")
                     );
-                    Ok(CallToolResult::success(vec![Content::text(text)]))
+                    Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
                 }
             }
 
@@ -827,7 +842,7 @@ impl ServerHandler for VideoTranscriberServer {
 
                 if !confirm {
                     let text = "⚠️ Deletion not confirmed. Set 'confirm' to true to delete all transcripts.".to_string();
-                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(text)]));
                 }
 
                 let output_dir = args
@@ -838,7 +853,7 @@ impl ServerHandler for VideoTranscriberServer {
 
                 if !output_dir.exists() {
                     let text = "📂 No transcripts directory found.".to_string();
-                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(text)]));
                 }
 
                 let mut deleted_count = 0;
@@ -853,14 +868,14 @@ impl ServerHandler for VideoTranscriberServer {
 
                 if deleted_count == 0 {
                     let text = "📂 No transcripts found to delete.".to_string();
-                    Ok(CallToolResult::success(vec![Content::text(text)]))
+                    Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
                 } else {
                     let text = format!(
                         "🗑️ Deleted ALL transcripts: {} file(s) removed from {}",
                         deleted_count,
                         output_dir.display()
                     );
-                    Ok(CallToolResult::success(vec![Content::text(text)]))
+                    Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
                 }
             }
 
@@ -877,7 +892,7 @@ impl ServerHandler for VideoTranscriberServer {
                     .trim()
                     .to_string();
                 if query.is_empty() {
-                    return Ok(CallToolResult::success(vec![Content::text(
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(
                         "Provide a `query` to search for.".to_string(),
                     )]));
                 }
@@ -896,7 +911,7 @@ impl ServerHandler for VideoTranscriberServer {
                     .unwrap_or_else(get_default_output_dir);
 
                 if !output_dir.exists() {
-                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                         "📂 No transcripts directory at {}.",
                         output_dir.display()
                     ))]));
@@ -954,7 +969,7 @@ impl ServerHandler for VideoTranscriberServer {
                 }
 
                 if cands.is_empty() {
-                    return Ok(CallToolResult::success(vec![Content::text(
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(
                         "No embedded transcripts found to search. Re-transcribe with \
                          OPENROUTER_API_KEY set so passages get embedded."
                             .to_string(),
@@ -964,7 +979,7 @@ impl ServerHandler for VideoTranscriberServer {
                 let qvec = match crate::llm::embed(vec![query.clone()]).await {
                     Ok(mut v) if !v.is_empty() => v.remove(0),
                     _ => {
-                        return Ok(CallToolResult::success(vec![Content::text(
+                        return Ok(CallToolResult::success(vec![ContentBlock::text(
                             "Failed to embed the query (check OPENROUTER_API_KEY).".to_string(),
                         )]));
                     }
@@ -1016,7 +1031,7 @@ impl ServerHandler for VideoTranscriberServer {
                     out.push('\n');
                 }
 
-                Ok(CallToolResult::success(vec![Content::text(out)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(out)]))
             }
 
             _ => Err(ErrorData::new(
