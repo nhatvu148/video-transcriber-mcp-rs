@@ -41,6 +41,9 @@ const AUDIENCE: &str = "authenticated";
 
 const ES256_PRIVATE: &str = include_str!("fixtures/test-es256-private.pem");
 const RS256_PRIVATE: &str = include_str!("fixtures/test-rs256-private.pem");
+/// A second, unrelated P-256 key — stands in for an attacker signing their own
+/// token with the algorithm and kid we expect.
+const ES256_ATTACKER_PRIVATE: &str = include_str!("fixtures/test-es256-attacker-private.pem");
 
 const EC_X: &str = "6TUusjoiKhF4G7xy_2eB3Ea1malyT9jAqaejjM2vUrQ";
 const EC_Y: &str = "nWzJN2zEQ0JSAa4VvlaPSiDHjvlSYDIfdI-nBViKs2A";
@@ -137,17 +140,36 @@ fn rejects_a_tampered_signature_without_panicking() {
     assert!(result.is_err(), "a tampered signature must not verify");
 }
 
-/// A token signed by a *different* key must not verify — the case that
-/// actually matters for auth, since anyone can mint their own ES256 token.
+/// The case that actually matters for auth: an attacker mints a token with
+/// their *own* ES256 key, using the same algorithm and kid we expect. There is
+/// no algorithm mismatch to fall back on here — only the signature check can
+/// reject this, so it is the test that genuinely exercises verification.
 #[test]
-fn rejects_a_token_signed_by_an_unknown_key() {
-    // Sign with the RSA fixture, then try to verify against the EC JWK.
+fn rejects_a_token_signed_by_a_different_key_of_the_same_algorithm() {
+    let attacker =
+        EncodingKey::from_ec_pem(ES256_ATTACKER_PRIVATE.as_bytes()).expect("attacker key");
+    // Same algorithm, same kid — everything matches except the signing key.
+    let token = sign(Algorithm::ES256, "test-es256", &attacker, &claims());
+
+    let decoding = DecodingKey::from_jwk(&es256_jwk()).expect("decoding key");
+    let result = decode::<Claims>(&token, &decoding, &production_validation(Algorithm::ES256));
+    assert!(
+        result.is_err(),
+        "a token signed by an unknown ES256 key must not verify"
+    );
+}
+
+/// Separately, a token whose algorithm doesn't match the JWK must be refused.
+/// This is rejected on the algorithm mismatch *before* signature verification,
+/// which is why it can't stand in for the wrong-key case above.
+#[test]
+fn rejects_a_token_whose_algorithm_does_not_match_the_jwk() {
     let key = EncodingKey::from_rsa_pem(RS256_PRIVATE.as_bytes()).expect("RS256 encoding key");
     let token = sign(Algorithm::RS256, "test-rs256", &key, &claims());
 
     let decoding = DecodingKey::from_jwk(&es256_jwk()).expect("decoding key");
     let result = decode::<Claims>(&token, &decoding, &production_validation(Algorithm::ES256));
-    assert!(result.is_err(), "a foreign-signed token must not verify");
+    assert!(result.is_err(), "an algorithm mismatch must not verify");
 }
 
 #[test]

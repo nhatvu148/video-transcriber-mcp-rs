@@ -45,17 +45,25 @@ sha2 = "0.11"
 #   Could not automatically determine the process-level CryptoProvider
 #   from jsonwebtoken crate features.
 #
-# aws-lc-rs (rather than `rust_crypto`) because rustls already links it here for
-# reqwest and sqlx, so this adds no new dependency and no new build step;
-# `rust_crypto` would pull in 7 more crates including `rsa`. Covered by the
-# signature tests in tests/jwt_verify.rs — do not drop the feature.
+# aws-lc-rs (rather than `rust_crypto`) because reqwest already pulls it in:
+# its `rustls` feature resolves to `__rustls-aws-lc-rs`, which turns on
+# rustls's aws-lc-rs backend. So this adds no new dependency and no new build
+# step, whereas `rust_crypto` would pull in 7 more crates including `rsa`.
+# Verify with: cargo tree -e features -i rustls
+#
+# Note this binary links *both* rustls backends — aws-lc-rs via reqwest as
+# above, and ring via sqlx's `tls-rustls-ring` below. That ambiguity is exactly
+# why jsonwebtoken can't pick a provider on its own and why the feature has to
+# be explicit here. Covered by tests/jwt_verify.rs — do not drop it.
 jsonwebtoken = {version = "11", features = ["aws_lc_rs"]}
 # Postgres-backed credit ledger (Supabase) when DATABASE_URL is set; falls back
 # to the JSON-on-disk store for standalone/forked deployments without a DB.
 # rustls (not native-tls) to match reqwest and avoid an OpenSSL build dep.
 # sqlx 0.9 split the old `runtime-tokio-rustls` feature into a runtime and a TLS
-# feature; `tls-rustls-ring` pins the same ring backend reqwest already links,
-# so we don't drag in a second rustls crypto provider.
+# feature. `tls-rustls-ring` keeps sqlx on ring, matching what sqlx 0.8's
+# `runtime-tokio-rustls` used, and is verified against real Postgres over TLS.
+# (It does not avoid a second provider — reqwest independently enables rustls's
+# aws-lc-rs backend, so both are linked. See the jsonwebtoken note above.)
 sqlx = {version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "json"]}
 tower = "0.5.3"
 tower_governor = "0.8"
