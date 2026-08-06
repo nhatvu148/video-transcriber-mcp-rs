@@ -36,8 +36,10 @@
 //! nothing.
 //!
 //! Since x402 decides on status alone, [`McpFailureStatus`] sits *between* the
-//! payment layer and the MCP service and re-stamps a failed tool result as
-//! 502, which makes x402 skip settlement. The router then restores the
+//! payment layer and the MCP service and re-stamps a failed call as 502, which
+//! makes x402 skip settlement. "Failed" covers both shapes MCP uses: an
+//! in-band `result.isError`, and a top-level JSON-RPC `error` — which is what
+//! this server's handlers actually return. The router then restores the
 //! original status on the way out, so the client still sees the ordinary
 //! JSON-RPC error it expects. The response body is untouched.
 //!
@@ -490,8 +492,27 @@ pub fn body_reports_tool_failure(body: &[u8]) -> bool {
     })
 }
 
-/// `result.isError == true` on a JSON-RPC response.
+/// Whether a JSON-RPC response reports a failed call.
+///
+/// Two shapes, because MCP servers use both and this one uses the second:
+///
+/// - `result.isError == true` — the tool ran and reported failure in-band.
+/// - a top-level `error` object — the handler returned `Err(ErrorData)`.
+///
+/// The second is what `dispatch_tool` actually produces. A failed
+/// transcription comes back as:
+///
+/// ```text
+/// {"jsonrpc":"2.0","id":2,"error":{"code":-32603,
+///  "message":"Transcription failed: Video file not found: ..."}}
+/// ```
+///
+/// Checking only `isError` meant this never fired for this server, and every
+/// failed transcription settled. Both shapes are handled now.
 fn reports_tool_error(json: &serde_json::Value) -> bool {
+    if json.get("error").is_some_and(|e| !e.is_null()) {
+        return true;
+    }
     json.get("result")
         .and_then(|result| result.get("isError"))
         .and_then(serde_json::Value::as_bool)
@@ -983,5 +1004,48 @@ mod cancellation_tests {
         });
         assert!(result.is_err());
         assert!(guard.claim_scoped("n3").is_some(), "unwind must release too");
+    }
+}
+
+#[cfg(test)]
+mod real_failure_tests {
+    use super::*;
+
+    /// Captured from a running server: `transcribe_video` against a missing
+    /// file. Verbatim, including the SSE framing — earlier tests used
+    /// hand-written JSON matching an assumed shape, which is why the
+    /// detection could pass its tests and still never fire in production.
+    const REAL_FAILURE_SSE: &[u8] = b"data: \nid: 0/0\nretry: 3000\n\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32603,\"message\":\"Transcription failed: Video file not found: /definitely/not/a/real/file.mp4\"}}\nid: 1/0\n\n";
+
+    #[test]
+    fn the_servers_actual_failure_response_is_detected() {
+        assert!(
+            body_reports_tool_failure(REAL_FAILURE_SSE),
+            "a real failed transcription must not settle"
+        );
+    }
+
+    /// The same shape unframed, as a client negotiating plain JSON receives it.
+    #[test]
+    fn a_top_level_jsonrpc_error_is_a_failure() {
+        let body = br#"{"jsonrpc":"2.0","id":2,"error":{"code":-32603,"message":"Transcription failed"}}"#;
+        assert!(body_reports_tool_failure(body));
+    }
+
+    /// Captured from the same server: a successful call. Must still settle.
+    #[test]
+    fn a_real_successful_response_still_settles() {
+        let success = b"data: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"Video transcribed successfully!\"}],\"isError\":false}}\n\n";
+        assert!(
+            !body_reports_tool_failure(success),
+            "delivered work must not be denied settlement"
+        );
+    }
+
+    /// An explicit null error must not read as a failure.
+    #[test]
+    fn a_null_error_field_is_not_a_failure() {
+        let body = br#"{"jsonrpc":"2.0","id":2,"error":null,"result":{"content":[]}}"#;
+        assert!(!body_reports_tool_failure(body));
     }
 }
