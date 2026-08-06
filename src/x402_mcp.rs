@@ -259,6 +259,23 @@ impl NonceGuard {
         seen.insert(nonce.to_string(), now);
         true
     }
+
+    /// Gives a nonce back.
+    ///
+    /// The claim is taken *before* the payment layer runs, so concurrent
+    /// retries can't both execute. But a payment that then fails verification
+    /// — bad signature, insufficient funds, a flaky facilitator — never ran
+    /// and never settled, and the correct client behaviour is to retry the
+    /// same signed payload. Holding the nonce would answer that legitimate
+    /// retry with a spurious "already used" for half an hour. So the claim is
+    /// kept only when the work actually executed and settled.
+    pub fn release(&self, nonce: &str) {
+        let mut seen = match self.seen.lock() {
+            Ok(seen) => seen,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        seen.remove(nonce);
+    }
 }
 
 /// Pulls the payment nonce out of an `X-PAYMENT` header.
@@ -339,7 +356,16 @@ where
             let (mut parts, body) = response.into_parts();
             let bytes = match axum::body::to_bytes(body, 8 * 1024 * 1024).await {
                 Ok(bytes) => bytes,
-                Err(_) => return Ok(axum::response::Response::from_parts(parts, Body::empty())),
+                // Keeping the 200 here would show the client a successful
+                // call with no content *and* let the payment settle. Say it
+                // failed, which also stops settlement upstream.
+                Err(_) => {
+                    parts.status = axum::http::StatusCode::BAD_GATEWAY;
+                    return Ok(axum::response::Response::from_parts(
+                        parts,
+                        Body::from("response too large to return"),
+                    ));
+                }
             };
 
             if body_reports_tool_failure(&bytes) {
@@ -356,13 +382,33 @@ where
 
 /// Whether an MCP response reports a failed tool call.
 ///
-/// Matches on the serialized body rather than parsing, because the same
-/// payload arrives either as bare JSON or wrapped in SSE `data:` frames
-/// depending on what the client negotiated. `isError` appears only in a tool
-/// result, so the match is specific enough.
+/// Reads the `result.isError` field structurally. An earlier version matched
+/// the raw bytes for `"isError":true`, which would misread a *successful*
+/// transcript that happened to contain that text as a failure — and then deny
+/// settlement for work that was genuinely delivered. Billing decisions
+/// shouldn't hinge on what a video says.
+///
+/// Handles both framings, since the same payload arrives as bare JSON or in
+/// SSE `data:` frames depending on what the client negotiated.
 pub fn body_reports_tool_failure(body: &[u8]) -> bool {
-    let text = String::from_utf8_lossy(body);
-    text.contains("\"isError\":true") || text.contains("\"isError\": true")
+    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(body) {
+        return reports_tool_error(&json);
+    }
+
+    String::from_utf8_lossy(body).lines().any(|line| {
+        line.strip_prefix("data:")
+            .and_then(|payload| serde_json::from_str::<serde_json::Value>(payload.trim()).ok())
+            .as_ref()
+            .is_some_and(reports_tool_error)
+    })
+}
+
+/// `result.isError == true` on a JSON-RPC response.
+fn reports_tool_error(json: &serde_json::Value) -> bool {
+    json.get("result")
+        .and_then(|result| result.get("isError"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
 }
 
 /// Routes each MCP request to either the free or the paid service.
@@ -458,12 +504,13 @@ where
 
                     // Refuse a replayed payment rather than doing — and
                     // settling — the same work twice.
-                    if let Some(nonce) = request
+                    let claimed_nonce = request
                         .headers()
                         .get("x-payment")
                         .and_then(|v| v.to_str().ok())
-                        .and_then(payment_nonce)
-                        && !nonces.claim(&nonce)
+                        .and_then(payment_nonce);
+                    if let Some(nonce) = claimed_nonce.as_deref()
+                        && !nonces.claim(nonce)
                     {
                         tracing::warn!("x402: refusing replayed payment nonce for `{tool}`");
                         return Ok(axum::response::IntoResponse::into_response((
@@ -480,6 +527,7 @@ where
                         )));
                     }
 
+                    let claimed = claimed_nonce.clone();
                     let mut response = paid.call(request).await?;
                     // Undo the 502 that McpFailureStatus used to stop
                     // settlement, so the client sees the JSON-RPC error it
@@ -491,6 +539,17 @@ where
                         && let Ok(status) = axum::http::StatusCode::from_u16(original)
                     {
                         *response.status_mut() = status;
+                        // Executed but the tool failed, so settlement was
+                        // skipped — the caller paid nothing and may retry.
+                        if let Some(nonce) = claimed.as_deref() {
+                            nonces.release(nonce);
+                        }
+                    } else if !response.status().is_success() {
+                        // Payment verification failed upstream: nothing ran,
+                        // nothing settled. Don't burn the nonce.
+                        if let Some(nonce) = claimed.as_deref() {
+                            nonces.release(nonce);
+                        }
                     }
                     Ok(response)
                 }
@@ -721,5 +780,68 @@ mod gap_tests {
         let ok = br#"{"jsonrpc":"2.0","id":1,"result":{"isError":false,"content":[]}}"#;
         assert!(!body_reports_tool_failure(ok));
         assert!(!body_reports_tool_failure(br#"{"result":{"tools":[]}}"#));
+    }
+}
+
+#[cfg(test)]
+mod review_fix_tests {
+    use super::*;
+
+    /// A payment that fails verification never ran and never settled, so the
+    /// client's correct move is to retry the same signed payload. Holding the
+    /// nonce would answer that with a spurious "already used".
+    #[test]
+    fn a_released_nonce_can_be_claimed_again() {
+        let guard = NonceGuard::default();
+        assert!(guard.claim("n1"));
+        assert!(!guard.claim("n1"), "still held while in flight");
+        guard.release("n1");
+        assert!(guard.claim("n1"), "retry after a failed payment must be admitted");
+    }
+
+    #[test]
+    fn releasing_an_unknown_nonce_is_harmless() {
+        let guard = NonceGuard::default();
+        guard.release("never-claimed");
+        assert!(guard.claim("never-claimed"));
+    }
+
+    /// The bug the structural check exists to prevent: a *successful*
+    /// transcript that happens to quote `"isError":true` must not be read as
+    /// a failure and denied settlement for work actually delivered.
+    #[test]
+    fn transcript_text_quoting_is_error_is_not_a_failure() {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "jsonrpc": "2.0", "id": 1,
+            "result": {
+                "isError": false,
+                "content": [{"type": "text",
+                             "text": "the JSON looked like {\"isError\":true} in the video"}]
+            }
+        }))
+        .unwrap();
+        assert!(
+            !body_reports_tool_failure(&body),
+            "a delivered transcript must not be denied settlement over its contents"
+        );
+    }
+
+    #[test]
+    fn a_real_failure_is_still_detected_in_both_framings() {
+        let json = serde_json::to_vec(&serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "result": {"isError": true, "content": []}
+        }))
+        .unwrap();
+        assert!(body_reports_tool_failure(&json));
+
+        let sse = b"event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"isError\":true}}\n\n";
+        assert!(body_reports_tool_failure(sse));
+    }
+
+    /// `isError` nested somewhere other than the tool result must not count.
+    #[test]
+    fn is_error_outside_the_result_is_ignored() {
+        let body = br#"{"jsonrpc":"2.0","id":1,"result":{"content":[]},"meta":{"isError":true}}"#;
+        assert!(!body_reports_tool_failure(body));
     }
 }
