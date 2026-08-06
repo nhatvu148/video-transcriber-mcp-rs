@@ -115,10 +115,10 @@ impl JwksCache {
     async fn current(&self) -> Result<JwkSet> {
         {
             let state = self.state.read().await;
-            if let (Some(ks), Some(at)) = (&state.keyset, &state.fetched_at) {
-                if at.elapsed() < JWKS_TTL {
-                    return Ok(ks.clone());
-                }
+            if let (Some(ks), Some(at)) = (&state.keyset, &state.fetched_at)
+                && at.elapsed() < JWKS_TTL
+            {
+                return Ok(ks.clone());
             }
         }
         self.refresh().await

@@ -91,28 +91,28 @@ pub struct FileState {
 ///   existing `credits.json` into the table (one-time), return `Db`.
 /// - else → load the JSON file, return `File`.
 pub async fn new_store() -> CreditStore {
-    if let Ok(url) = std::env::var("DATABASE_URL") {
-        if !url.trim().is_empty() {
-            let pool = PgPoolOptions::new()
-                .max_connections(5)
-                .acquire_timeout(Duration::from_secs(10))
-                .connect(&url)
-                .await
-                .expect(
-                    "DATABASE_URL is set but the Postgres connection failed — \
-                     refusing to start with divergent money state. Check the \
-                     connection string / network and retry.",
-                );
-            if let Err(e) = sqlx::query(CREATE_TABLE_SQL).execute(&pool).await {
-                // Table may already exist with the right shape and the role may
-                // lack CREATE — that's fine as long as the table is there. Log
-                // and continue; the first real query will surface a hard error.
-                warn!("Credits: ensure-table failed ({e}); assuming table exists");
-            }
-            migrate_file_into_db_if_empty(&pool).await;
-            info!("Credits: using Postgres backend");
-            return CreditStore::Db(pool);
+    if let Ok(url) = std::env::var("DATABASE_URL")
+        && !url.trim().is_empty()
+    {
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .acquire_timeout(Duration::from_secs(10))
+            .connect(&url)
+            .await
+            .expect(
+                "DATABASE_URL is set but the Postgres connection failed — \
+                 refusing to start with divergent money state. Check the \
+                 connection string / network and retry.",
+            );
+        if let Err(e) = sqlx::query(CREATE_TABLE_SQL).execute(&pool).await {
+            // Table may already exist with the right shape and the role may
+            // lack CREATE — that's fine as long as the table is there. Log
+            // and continue; the first real query will surface a hard error.
+            warn!("Credits: ensure-table failed ({e}); assuming table exists");
         }
+        migrate_file_into_db_if_empty(&pool).await;
+        info!("Credits: using Postgres backend");
+        return CreditStore::Db(pool);
     }
 
     // ---- File fallback ----

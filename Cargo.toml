@@ -61,6 +61,11 @@ whisper-rs = "0.16"
 
 [dev-dependencies]
 criterion = "0.8"
+# Integration tests in `tests/` can't see the crate's regular dependencies, so
+# the HTTP-transport e2e suite needs its own client + runtime. Same versions
+# and features as above, so cargo reuses the already-built artifacts.
+reqwest = {version = "0.13", features = ["json", "rustls"], default-features = false}
+tokio = {version = "1.53", features = ["full"]}
 
 [profile.release]
 codegen-units = 1
