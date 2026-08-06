@@ -35,7 +35,21 @@ hmac = "0.13"
 sha2 = "0.11"
 # JWT verification for Supabase Auth — used by the auth middleware to validate
 # tokens from the web/extension before crediting any operation.
-jsonwebtoken = "11"
+#
+# The `aws_lc_rs` feature is REQUIRED, not optional tuning. jsonwebtoken 11 made
+# the crypto backend pluggable and its default features select *neither*
+# provider, so a bare `jsonwebtoken = "11"` compiles and links fine, parses
+# headers fine, and rejects malformed tokens fine — then panics the moment it
+# verifies a real signature:
+#
+#   Could not automatically determine the process-level CryptoProvider
+#   from jsonwebtoken crate features.
+#
+# aws-lc-rs (rather than `rust_crypto`) because rustls already links it here for
+# reqwest and sqlx, so this adds no new dependency and no new build step;
+# `rust_crypto` would pull in 7 more crates including `rsa`. Covered by the
+# signature tests in tests/jwt_verify.rs — do not drop the feature.
+jsonwebtoken = {version = "11", features = ["aws_lc_rs"]}
 # Postgres-backed credit ledger (Supabase) when DATABASE_URL is set; falls back
 # to the JSON-on-disk store for standalone/forked deployments without a DB.
 # rustls (not native-tls) to match reqwest and avoid an OpenSSL build dep.
