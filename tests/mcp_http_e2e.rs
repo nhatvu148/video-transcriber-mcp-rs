@@ -502,6 +502,17 @@ async fn priced_tool_is_challenged_with_402_when_unpaid() {
         Some(TEST_PAY_TO),
         "the challenge must name our receiving address"
     );
+    // A challenge without an amount can't be acted on, which is as useless as
+    // a 400. v1 carries it as `maxAmountRequired`, in the asset's base units —
+    // 200000 at USDC's 6 decimals is $0.20.
+    let amount = accepts[0]["maxAmountRequired"]
+        .as_str()
+        .unwrap_or_else(|| panic!("challenge must state an amount: {}", accepts[0]));
+    assert_eq!(amount, "200000", "expected $0.20 in USDC base units");
+    assert!(
+        accepts[0]["asset"].as_str().is_some_and(|a| !a.is_empty()),
+        "the challenge must name the asset to pay in"
+    );
 }
 
 /// With payments off (the default), the priced tool must NOT be challenged —

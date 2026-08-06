@@ -35,11 +35,14 @@ head2() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 # --- prerequisites ---------------------------------------------------------
 
 head2 "Prerequisites"
-if [ ! -x "$BIN" ]; then
-    echo "  Building release binary (first run takes a few minutes)..."
-    cargo build --release --quiet || { echo "  build failed"; exit 1; }
-fi
-ok "server binary present"
+# Always build, never just check the binary exists. A stale binary left from
+# an earlier build silently tests the wrong code — which is exactly what
+# happened when this checked existence: an old EVM build rejected a Solana
+# address and the failure looked like a bad address rather than a stale build.
+# cargo is a no-op when it is already current.
+echo "  Building (no-op if already current)..."
+cargo build --release --quiet || { echo "  build failed"; exit 1; }
+ok "server binary is current with the working tree"
 
 if [ -n "${X402_PAY_TO:-}" ]; then
     ok "X402_PAY_TO is set (${X402_PAY_TO})"
@@ -124,7 +127,10 @@ if [ "$PAID_MODE" = "1" ]; then
 import json,sys
 d=json.loads(sys.stdin.read())
 a=d['accepts'][0]
-print(f\"pay {a.get('amount')} of {a.get('asset','?')[:10]}… on {a.get('network')} to {a.get('payTo')}\")
+amt=a.get('maxAmountRequired') or a.get('amount')
+usd=f\"\${int(amt)/1_000_000:.2f}\" if str(amt).isdigit() else amt
+print(f\"pay {usd} ({amt} base units) of {a.get('asset','?')[:10]}… on {a.get('network')} to {a.get('payTo')}\")
+if a.get('extra',{}).get('feePayer'): print(f\"    network fees sponsored by the facilitator\")
 " <<< "$PRICED_BODY" 2>/dev/null || echo 'could not parse accepts')"
         else
             bad "402 carried no 'accepts' — a client cannot act on it"
@@ -170,8 +176,9 @@ if [ "$PAID_MODE" = "0" ]; then
 
          https://faucet.circle.com     → choose "Solana Devnet"
 
-     $1 covers five calls at $0.20. The payer also needs a little devnet
-     SOL for rent/fees:
+     $1 covers five calls at $0.20. The challenge names a facilitator
+     feePayer, so network fees are sponsored — you should not need SOL.
+     If a payment fails for fees, top up with:
 
          solana airdrop 1 <payer-address> --url devnet
 
