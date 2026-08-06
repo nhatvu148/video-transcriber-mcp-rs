@@ -411,9 +411,10 @@ fn initialize_body() -> String {
 // is the facilitator's job and is covered by x402-axum's own tests.
 // ---------------------------------------------------------------------------
 
-/// A Base Sepolia address used only to switch payments on in tests. Funds are
-/// never moved — no request here presents a payment.
-const TEST_PAY_TO: &str = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
+/// A Solana address used only to switch payments on in tests. Funds are never
+/// moved — no request here presents a payment. (Solana's system program, which
+/// is a real, valid pubkey nobody can spend from.)
+const TEST_PAY_TO: &str = "11111111111111111111111111111111";
 
 fn paid_server_env() -> Vec<(&'static str, &'static str)> {
     vec![("X402_PAY_TO", TEST_PAY_TO)]
@@ -497,8 +498,8 @@ async fn priced_tool_is_challenged_with_402_when_unpaid() {
         .unwrap_or_else(|| panic!("402 must carry an `accepts` array: {challenge}"));
     assert!(!accepts.is_empty(), "`accepts` must not be empty");
     assert_eq!(
-        accepts[0]["payTo"].as_str().map(str::to_lowercase),
-        Some(TEST_PAY_TO.to_lowercase()),
+        accepts[0]["payTo"].as_str(),
+        Some(TEST_PAY_TO),
         "the challenge must name our receiving address"
     );
 }

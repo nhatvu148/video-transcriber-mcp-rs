@@ -8,7 +8,7 @@
 #
 #   scripts/x402-check.sh
 #
-# Set X402_PAY_TO to your Base Sepolia receiving address to exercise the paid
+# Set X402_PAY_TO to your Solana receiving address to exercise the paid
 # path. Without it the script still verifies that payments stay off, which is
 # the behaviour every existing deployment depends on.
 
@@ -159,22 +159,25 @@ if [ "$PAID_MODE" = "0" ]; then
 
   You need two throwaway wallets: one to RECEIVE, one to PAY.
 
-  1. Create them. Any wallet generator works; with foundry installed:
+  1. Create them. With the Solana CLI installed:
 
-         cast wallet new        # run twice — keep both addresses + keys
+         solana-keygen new -o payer.json      # keep this key local
+         solana address -k payer.json
 
-     Or use MetaMask and switch the network to Base Sepolia.
+     Or use Phantom and switch the network to Devnet.
 
-  2. Fund only the PAYER with testnet USDC:
+  2. Fund only the PAYER with devnet USDC:
 
-         https://faucet.circle.com     → choose "Base Sepolia"
+         https://faucet.circle.com     → choose "Solana Devnet"
 
-     $1 covers five calls at $0.20. You do NOT need testnet ETH: x402
-     uses ERC-3009, so the facilitator pays the gas, not you.
+     $1 covers five calls at $0.20. The payer also needs a little devnet
+     SOL for rent/fees:
+
+         solana airdrop 1 <payer-address> --url devnet
 
   3. Re-run this script with the RECEIVER address:
 
-         X402_PAY_TO=0xYourReceiverAddress scripts/x402-check.sh
+         X402_PAY_TO=<your-solana-address> scripts/x402-check.sh
 
      Everything above will then run against the paid path.
 
@@ -182,7 +185,7 @@ if [ "$PAID_MODE" = "0" ]; then
      it has to sign the payment. See the "settlement" section of PR #18.
      Once it runs, confirm the transfer independently at:
 
-         https://sepolia.basescan.org/address/0xYourReceiverAddress
+         https://explorer.solana.com/address/<receiver>?cluster=devnet
 
   Nothing in this script moves funds, and it never asks for a private key.
 GUIDE

@@ -66,11 +66,11 @@ use tower::Service;
 
 use std::sync::Arc;
 
-use alloy_primitives::Address;
+use x402_chain_solana::chain::Address;
 use x402_axum::facilitator_client::FacilitatorClient;
 use x402_axum::{StaticPriceTags, X402LayerBuilder, X402Middleware};
-// KnownNetworkEip155 is what puts `USDC::base_sepolia()` in scope.
-use x402_chain_eip155::{KnownNetworkEip155, V1Eip155Exact};
+// KnownNetworkSolana is what puts `USDC::solana_devnet()` in scope.
+use x402_chain_solana::{KnownNetworkSolana, V1SolanaExact};
 use x402_types::networks::USDC;
 
 
@@ -165,7 +165,7 @@ pub struct PaymentSettings {
 impl PaymentSettings {
     /// Human-readable network name, for the catalogue and logs.
     pub fn network(&self) -> &'static str {
-        if self.mainnet { "base" } else { "base-sepolia" }
+        if self.mainnet { "solana" } else { "solana-devnet" }
     }
 }
 
@@ -182,12 +182,14 @@ pub fn payment_settings() -> Option<PaymentSettings> {
         }
     };
     let price = std::env::var("X402_PRICE_USD").unwrap_or_else(|_| DEFAULT_PRICE_USD.to_string());
-    let mainnet = std::env::var("X402_NETWORK").map(|n| n.trim() == "base").unwrap_or(false);
+    let mainnet = std::env::var("X402_NETWORK")
+        .map(|n| matches!(n.trim(), "solana" | "mainnet"))
+        .unwrap_or(false);
     let facilitator =
         std::env::var("X402_FACILITATOR").unwrap_or_else(|_| DEFAULT_FACILITATOR.to_string());
 
     // Reject an unusable price here too, so the catalogue and the gate agree.
-    let usdc = if mainnet { USDC::base() } else { USDC::base_sepolia() };
+    let usdc = if mainnet { USDC::solana() } else { USDC::solana_devnet() };
     if let Err(e) = usdc.parse(price.as_str()) {
         tracing::error!("X402_PRICE_USD `{price}` is invalid ({e}) — MCP payments stay disabled");
         return None;
@@ -204,14 +206,14 @@ pub fn payment_settings() -> Option<PaymentSettings> {
 /// toward play money rather than toward charging someone.
 pub fn layer_from_env() -> Option<PaidLayer> {
     let settings = payment_settings()?;
-    let usdc = if settings.mainnet { USDC::base() } else { USDC::base_sepolia() };
+    let usdc = if settings.mainnet { USDC::solana() } else { USDC::solana_devnet() };
     // Already validated by payment_settings().
     let amount = usdc.parse(settings.price.as_str()).ok()?;
 
     tracing::info!(
         "MCP payments ON: ${} per priced tool call on {}, paid to {}",
         settings.price,
-        if settings.mainnet { "Base MAINNET (real funds)" } else { "Base Sepolia (testnet)" },
+        if settings.mainnet { "Solana MAINNET (real funds)" } else { "Solana devnet (test funds)" },
         settings.pay_to
     );
 
@@ -221,7 +223,7 @@ pub fn layer_from_env() -> Option<PaidLayer> {
             // note: an MCP tool that fails still returns 200, so this does not
             // currently spare the caller for a failed job.
             .settle_after_execution()
-            .with_price_tag(V1Eip155Exact::price_tag(settings.pay_to, amount)),
+            .with_price_tag(V1SolanaExact::price_tag(settings.pay_to, amount)),
     )
 }
 
