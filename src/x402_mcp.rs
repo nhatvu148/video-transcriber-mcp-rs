@@ -27,13 +27,15 @@
 //! Payment is not authorization. Settling a call buys that one call and
 //! nothing else.
 //!
-//! # Status: routing only, not yet wired up
+//! # Known gap: settlement on tool failure
 //!
-//! The free/paid decision below is complete and tested. What is missing is
-//! constructing the x402 layer itself from configuration and mounting this
-//! router on `/mcp` in `main.rs` — see the PR for exactly what remains. Until
-//! that lands nothing here is reachable, hence the `allow(dead_code)`.
-#![allow(dead_code)]
+//! `settle_after_execution` skips settlement only when the response carries a
+//! non-2xx status (`paygate.rs`: `is_client_error() || is_server_error()`).
+//! MCP reports tool failures as **HTTP 200** with `isError: true` in the
+//! JSON-RPC body, so a failed transcription still settles and the caller is
+//! billed for work that produced nothing. Closing this needs the response
+//! body inspected before settlement, which the layer exposes no hook for
+//! today. Tracked with the idempotency work.
 
 use std::task::{Context, Poll};
 
@@ -124,13 +126,32 @@ pub const DEFAULT_FACILITATOR: &str = "https://facilitator.x402.rs";
 pub type PaidLayer =
     X402LayerBuilder<StaticPriceTags<x402_types::proto::v1::PriceTag>, Arc<FacilitatorClient>>;
 
-/// Builds the x402 layer from the environment, or `None` when payment is off.
+/// Validated payment settings, or `None` when this deployment doesn't charge.
 ///
-/// Disabled unless `X402_PAY_TO` is set, so existing deployments are
-/// unaffected until an operator opts in. Testnet is the default: reaching real
-/// money takes an explicit `X402_NETWORK=base`, so a misconfiguration fails
-/// toward play money rather than toward charging someone.
-pub fn layer_from_env() -> Option<PaidLayer> {
+/// The single source of truth for "are we charging, and how much". Both the
+/// payment layer and the tool catalogue derive from it, so the catalogue can't
+/// advertise a price the gate doesn't actually enforce — which is exactly what
+/// happened when each re-read the raw environment independently: an
+/// unparseable `X402_PAY_TO` left payments off while the description still
+/// claimed a price.
+pub struct PaymentSettings {
+    pub pay_to: Address,
+    pub price: String,
+    pub mainnet: bool,
+    pub facilitator: String,
+}
+
+impl PaymentSettings {
+    /// Human-readable network name, for the catalogue and logs.
+    pub fn network(&self) -> &'static str {
+        if self.mainnet { "base" } else { "base-sepolia" }
+    }
+}
+
+/// Reads and *validates* payment settings. `None` means payments are off —
+/// either unconfigured, or configured wrongly, which is logged and treated as
+/// off rather than allowed to half-enable the feature.
+pub fn payment_settings() -> Option<PaymentSettings> {
     let pay_to = std::env::var("X402_PAY_TO").ok().filter(|v| !v.trim().is_empty())?;
     let pay_to: Address = match pay_to.trim().parse() {
         Ok(address) => address,
@@ -139,33 +160,47 @@ pub fn layer_from_env() -> Option<PaidLayer> {
             return None;
         }
     };
-
     let price = std::env::var("X402_PRICE_USD").unwrap_or_else(|_| DEFAULT_PRICE_USD.to_string());
     let mainnet = std::env::var("X402_NETWORK").map(|n| n.trim() == "base").unwrap_or(false);
     let facilitator =
         std::env::var("X402_FACILITATOR").unwrap_or_else(|_| DEFAULT_FACILITATOR.to_string());
 
+    // Reject an unusable price here too, so the catalogue and the gate agree.
     let usdc = if mainnet { USDC::base() } else { USDC::base_sepolia() };
-    let amount = match usdc.parse(price.as_str()) {
-        Ok(amount) => amount,
-        Err(e) => {
-            tracing::error!("X402_PRICE_USD `{price}` is invalid ({e}) — MCP payments stay disabled");
-            return None;
-        }
-    };
+    if let Err(e) = usdc.parse(price.as_str()) {
+        tracing::error!("X402_PRICE_USD `{price}` is invalid ({e}) — MCP payments stay disabled");
+        return None;
+    }
+
+    Some(PaymentSettings { pay_to, price, mainnet, facilitator })
+}
+
+/// Builds the x402 layer from the environment, or `None` when payment is off.
+///
+/// Disabled unless `X402_PAY_TO` is set, so existing deployments are
+/// unaffected until an operator opts in. Testnet is the default: reaching real
+/// money takes an explicit `X402_NETWORK=base`, so a misconfiguration fails
+/// toward play money rather than toward charging someone.
+pub fn layer_from_env() -> Option<PaidLayer> {
+    let settings = payment_settings()?;
+    let usdc = if settings.mainnet { USDC::base() } else { USDC::base_sepolia() };
+    // Already validated by payment_settings().
+    let amount = usdc.parse(settings.price.as_str()).ok()?;
 
     tracing::info!(
-        "MCP payments ON: ${price} per priced tool call on {}, paid to {pay_to}",
-        if mainnet { "Base MAINNET (real funds)" } else { "Base Sepolia (testnet)" }
+        "MCP payments ON: ${} per priced tool call on {}, paid to {}",
+        settings.price,
+        if settings.mainnet { "Base MAINNET (real funds)" } else { "Base Sepolia (testnet)" },
+        settings.pay_to
     );
 
     Some(
-        X402Middleware::new(facilitator.as_str())
-            // Transcription is slow and expensive: verify the payment up front,
-            // but only move funds once the work succeeded, so a failed job
-            // doesn't bill the caller.
+        X402Middleware::new(settings.facilitator.as_str())
+            // Verify up front, settle after the work — but see the module-level
+            // note: an MCP tool that fails still returns 200, so this does not
+            // currently spare the caller for a failed job.
             .settle_after_execution()
-            .with_price_tag(V1Eip155Exact::price_tag(pay_to, amount)),
+            .with_price_tag(V1Eip155Exact::price_tag(settings.pay_to, amount)),
     )
 }
 
@@ -235,9 +270,18 @@ where
                 // Substituting an empty body would surface as a confusing
                 // downstream parse error; say what actually happened.
                 Err(_) => {
+                    // JSON-RPC shaped, like every other error an MCP client
+                    // sees from this endpoint.
                     return Ok(axum::response::IntoResponse::into_response((
                         axum::http::StatusCode::PAYLOAD_TOO_LARGE,
-                        "request body too large for the MCP endpoint",
+                        axum::Json(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": serde_json::Value::Null,
+                            "error": {
+                                "code": -32600,
+                                "message": "request body too large for the MCP endpoint"
+                            }
+                        })),
                     )));
                 }
             };

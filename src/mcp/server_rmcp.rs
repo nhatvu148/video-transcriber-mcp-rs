@@ -36,29 +36,25 @@ impl VideoTranscriberServer {
 /// deployment charges for it.
 ///
 /// Agents choose tools partly on cost, so a priced tool that doesn't say so
-/// gets called blind and the caller discovers the charge only via a 402. The
-/// price lives in the catalogue where it can inform the decision, which is
-/// also what the x402 conventions recommend.
+/// gets called blind and the caller discovers the charge only via a 402.
 ///
-/// Reads the same variables as the payment layer so the two can't disagree:
-/// silent when payments are off, which is the default.
+/// Derives from the same validated settings the payment layer uses, so the
+/// catalogue can't advertise a price the gate doesn't enforce — re-reading the
+/// raw environment here meant a malformed `X402_PAY_TO` left calls free while
+/// the description still claimed a price.
 fn transcribe_video_description() -> String {
     const BASE: &str = "Transcribe videos from 1000+ platforms (YouTube, Vimeo, TikTok, Twitter, etc.) or local video files using whisper.cpp (4-10x faster than Python whisper!). Downloads/extracts audio and generates transcript in TXT, JSON, and Markdown formats.";
 
-    let charging = std::env::var("X402_PAY_TO")
-        .ok()
-        .is_some_and(|v| !v.trim().is_empty());
-    if !charging {
-        return BASE.to_string();
+    match crate::x402_mcp::payment_settings() {
+        None => BASE.to_string(),
+        Some(settings) => format!(
+            "{BASE} COST: ${} USDC per call ({}), paid via x402 — the server \
+             answers an unpaid call with HTTP 402 and payment instructions. \
+             All other tools on this server are free.",
+            settings.price,
+            settings.network()
+        ),
     }
-
-    let price = std::env::var("X402_PRICE_USD").unwrap_or_else(|_| "0.20".to_string());
-    let network = std::env::var("X402_NETWORK").unwrap_or_else(|_| "base-sepolia".to_string());
-    format!(
-        "{BASE} COST: ${price} USDC per call ({network}), paid via x402 — \
-         the server answers an unpaid call with HTTP 402 and payment \
-         instructions. All other tools on this server are free."
-    )
 }
 
 impl ServerHandler for VideoTranscriberServer {

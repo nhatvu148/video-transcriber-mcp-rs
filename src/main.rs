@@ -21,12 +21,11 @@ mod llm;
 mod mcp;
 mod transcriber;
 mod utils;
-mod x402_mcp;
 
 use api::AppState;
 use mcp::VideoTranscriberServer;
 use transcriber::TranscriberEngine;
-use video_transcriber_mcp::credits;
+use video_transcriber_mcp::{credits, x402_mcp};
 
 /// Transport mode for the MCP server
 #[derive(Debug, Clone, ValueEnum)]
