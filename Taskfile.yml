@@ -439,14 +439,80 @@ tasks:
         fi
 
   # ---------------------------------------------------------------------------
+  # Verification — what to run before publishing or deploying
+  # ---------------------------------------------------------------------------
+  verify:
+    desc: "Full local verification: lint + tests + MCP smoke + real transcription"
+    cmds:
+      - task: lint
+      - task: test
+      - task: mcp:smoke
+      - task: mcp:transcribe
+      - |
+        echo ""
+        echo "✅ Full verification passed."
+
+  test:
+    desc: Run the whole test suite (Postgres tests skip without DATABASE_URL)
+    cmds:
+      - cargo test --all-targets
+      - |
+        if [ -z "$DATABASE_URL" ]; then
+          echo ""
+          echo "ℹ️  tests/credits_pg.rs skipped — no DATABASE_URL."
+          echo "   Run 'task test:pg' to cover the Postgres credit ledger."
+        fi
+
+  test:pg:
+    desc: Run the Postgres credit-ledger tests against a throwaway database
+    cmds:
+      - |
+        # The ledger is the money path and every other credits test uses the
+        # file backend, so the sqlx code only gets exercised here.
+        set -e
+        NAME=vtm-test-pg
+        PORT=55440
+        cleanup() { docker rm -f $NAME >/dev/null 2>&1 || true; }
+        trap cleanup EXIT
+        cleanup
+        echo "🐘 starting throwaway Postgres on :$PORT..."
+        docker run -d --name $NAME -e POSTGRES_PASSWORD=postgres \
+          -e POSTGRES_DB=credits_test -p $PORT:5432 postgres:16-alpine >/dev/null
+        for i in $(seq 1 40); do
+          docker exec $NAME pg_isready -U postgres >/dev/null 2>&1 && break
+          sleep 1
+        done
+        DATABASE_URL="postgres://postgres:postgres@localhost:$PORT/credits_test" \
+        CREDITS_DB_PATH="$(mktemp -d)/credits.json" \
+          cargo test --test credits_pg -- --nocapture
+    preconditions:
+      - sh: command -v docker >/dev/null
+        msg: "Docker is required for task test:pg (it runs a throwaway Postgres)."
+
+  # ---------------------------------------------------------------------------
   # MCP Server tasks
   # ---------------------------------------------------------------------------
+  mcp:smoke:
+    desc: Drive the built binary over stdio and check every read-only tool answers
+    deps: [build]
+    cmds:
+      - python3 scripts/mcp-smoke.py {{.BINARY}}
+
+  mcp:transcribe:
+    desc: "End-to-end: transcribe known speech and assert the words come back (needs tiny model)"
+    deps: [build]
+    cmds:
+      - python3 scripts/mcp-transcribe-check.py {{.BINARY}}
+
   mcp:test:
-    desc: Test MCP server with stdio
+    desc: Minimal stdio handshake against the MCP server
     deps: [build]
     cmds:
       - |
-        echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | {{.BINARY}}
+        # A bare initialize, mostly to confirm the binary starts and speaks
+        # JSON-RPC. `task mcp:smoke` is the real check.
+        printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"task","version":"1"}}}' \
+          | {{.BINARY}} --transport stdio 2>/dev/null
 
   mcp:setup:
     desc: Show MCP setup instructions
