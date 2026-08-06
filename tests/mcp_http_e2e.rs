@@ -402,3 +402,134 @@ fn initialize_body() -> String {
     })
     .to_string()
 }
+
+// ---------------------------------------------------------------------------
+// x402 pay-per-call gating
+//
+// These need no wallet: they assert *which* requests are challenged, which is
+// the decision this server owns. Whether a presented payment actually settles
+// is the facilitator's job and is covered by x402-axum's own tests.
+// ---------------------------------------------------------------------------
+
+/// A Base Sepolia address used only to switch payments on in tests. Funds are
+/// never moved — no request here presents a payment.
+const TEST_PAY_TO: &str = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
+
+fn paid_server_env() -> Vec<(&'static str, &'static str)> {
+    vec![("X402_PAY_TO", TEST_PAY_TO)]
+}
+
+/// Discovery must stay free even with payments on. This is the whole reason
+/// the routing layer exists: a blanket x402 layer would 402 the handshake, and
+/// an agent that can't read the catalogue can never decide to buy from it.
+#[tokio::test]
+async fn discovery_is_free_when_payments_are_enabled() {
+    let server = HttpServer::start_with_env(&paid_server_env()).await;
+
+    // initialize must succeed and open a session…
+    let (session, init) = server.open_session().await;
+    assert_eq!(init["protocolVersion"], PROTOCOL);
+
+    // …and tools/list must return the catalogue, not a 402.
+    let result = server.request(&session, 2, "tools/list", json!({})).await;
+    assert_eq!(
+        result["tools"].as_array().expect("tools").len(),
+        9,
+        "tools/list must be free and complete when payments are on"
+    );
+}
+
+/// Free tools stay callable with payments on — only the expensive one is gated.
+#[tokio::test]
+async fn free_tools_are_callable_when_payments_are_enabled() {
+    let server = HttpServer::start_with_env(&paid_server_env()).await;
+    let (session, _) = server.open_session().await;
+
+    let result = server
+        .request(
+            &session,
+            2,
+            "tools/call",
+            json!({"name": "list_supported_sites", "arguments": {}}),
+        )
+        .await;
+    assert_eq!(result["isError"], json!(false));
+}
+
+/// The point of the feature: calling the priced tool without payment must be
+/// challenged with 402 — and specifically 402, not 400. Clients treat 402 as
+/// "retry with payment"; 400 is terminal and would strand a paying agent.
+#[tokio::test]
+async fn priced_tool_is_challenged_with_402_when_unpaid() {
+    let server = HttpServer::start_with_env(&paid_server_env()).await;
+    let (session, _) = server.open_session().await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{}/mcp", server.base))
+        .header("content-type", "application/json")
+        .header("accept", ACCEPT)
+        .header("mcp-session-id", &session)
+        .body(
+            json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "transcribe_video",
+                           "arguments": {"url": "https://example.test/video.mp4"}}
+            })
+            .to_string(),
+        )
+        .send()
+        .await
+        .expect("unpaid call to a priced tool");
+
+    assert_eq!(
+        response.status(),
+        reqwest::StatusCode::PAYMENT_REQUIRED,
+        "an unpaid priced tool call must return 402, got {}",
+        response.status()
+    );
+
+    // The challenge has to tell the client what to pay, or it can't retry.
+    let body = response.text().await.expect("402 body");
+    let challenge: Value = serde_json::from_str(&body)
+        .unwrap_or_else(|e| panic!("402 body must be JSON ({e}): {body}"));
+    let accepts = challenge["accepts"]
+        .as_array()
+        .unwrap_or_else(|| panic!("402 must carry an `accepts` array: {challenge}"));
+    assert!(!accepts.is_empty(), "`accepts` must not be empty");
+    assert_eq!(
+        accepts[0]["payTo"].as_str().map(str::to_lowercase),
+        Some(TEST_PAY_TO.to_lowercase()),
+        "the challenge must name our receiving address"
+    );
+}
+
+/// With payments off (the default), the priced tool must NOT be challenged —
+/// otherwise enabling the feature would be impossible to opt out of, and every
+/// existing deployment would break.
+#[tokio::test]
+async fn priced_tool_is_not_challenged_when_payments_are_disabled() {
+    let server = HttpServer::start().await; // no X402_PAY_TO
+    let (session, _) = server.open_session().await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{}/mcp", server.base))
+        .header("content-type", "application/json")
+        .header("accept", ACCEPT)
+        .header("mcp-session-id", &session)
+        .body(
+            json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "transcribe_video", "arguments": {}}
+            })
+            .to_string(),
+        )
+        .send()
+        .await
+        .expect("call with payments disabled");
+
+    assert_ne!(
+        response.status(),
+        reqwest::StatusCode::PAYMENT_REQUIRED,
+        "payments are off; nothing should be challenged"
+    );
+}

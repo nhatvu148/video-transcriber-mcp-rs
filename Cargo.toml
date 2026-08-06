@@ -87,7 +87,9 @@ x402-chain-eip155 = {version = "2.0.2", features = ["server"]}
 alloy-primitives = "1"
 tower = "0.5.3"
 tower_governor = "0.8"
-tower-http = {version = "0.7", features = ["cors", "trace"]}
+# map-response-body bridges rmcp's BoxBody responses to axum's Body,
+# which the x402 layer and Router::fallback_service both require.
+tower-http = {version = "0.7", features = ["cors", "trace", "map-response-body"]}
 tracing = "0.1"
 tracing-subscriber = {version = "0.3", features = ["env-filter"]}
 uuid = {version = "1.24", features = ["v4", "serde"]}

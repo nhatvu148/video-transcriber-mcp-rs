@@ -180,6 +180,25 @@ async fn run_http_transport(host: &str, port: u16) -> Result<()> {
         mcp_config,
     );
 
+    // Wrap in the x402 pay-per-call router when payments are configured.
+    // Both arms become a Router so the two service types unify.
+    // rmcp responds with BoxBody; axum and the x402 layer want axum::body::Body.
+    let mcp_service = tower::Layer::layer(
+        &tower_http::map_response_body::MapResponseBodyLayer::new(axum::body::Body::new),
+        mcp_service,
+    );
+    let mcp_router: axum::Router = match x402_mcp::layer_from_env() {
+        Some(layer) => {
+            let paid = tower::Layer::layer(&layer, mcp_service.clone());
+            axum::Router::new()
+                .fallback_service(x402_mcp::X402McpRouter::new(mcp_service, paid))
+        }
+        None => {
+            tracing::info!("MCP payments OFF — set X402_PAY_TO to charge for priced tools");
+            axum::Router::new().fallback_service(mcp_service)
+        }
+    };
+
     // Supabase JWKS cache for verifying user auth tokens. Falls back to a
     // placeholder URL if SUPABASE_URL isn't configured — the cache will
     // simply fail to fetch and every auth-requiring endpoint will 401,
@@ -256,7 +275,7 @@ async fn run_http_transport(host: &str, port: u16) -> Result<()> {
 
     let router = axum::Router::new()
         .nest("/api", api_router.layer(governor_layer))
-        .nest_service("/mcp", mcp_service)
+        .nest_service("/mcp", mcp_router)
         .layer(cors);
 
     let addr = format!("{}:{}", host, port);
