@@ -21,6 +21,7 @@ mod llm;
 mod mcp;
 mod transcriber;
 mod utils;
+mod x402_mcp;
 
 use api::AppState;
 use mcp::VideoTranscriberServer;

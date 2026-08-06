@@ -73,6 +73,14 @@ jsonwebtoken = {version = "11", features = ["aws_lc_rs"]}
 # (It does not avoid a second provider — reqwest independently enables rustls's
 # aws-lc-rs backend, so both are linked. See the jsonwebtoken note above.)
 sqlx = {version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "json"]}
+# x402 pay-per-call for the MCP endpoint (see src/x402_mcp.rs). The layer from
+# x402-axum handles the protocol — 402 challenges, facilitator verify/settle,
+# conformance checks — and our own layer only decides *which* JSON-RPC requests
+# reach it, since MCP puts every method behind one POST route.
+x402-axum = "2.0.2"
+x402-types = "2.0.2"
+x402-chain-eip155 = "2.0.2"
+alloy-primitives = "1"
 tower = "0.5.3"
 tower_governor = "0.8"
 tower-http = {version = "0.7", features = ["cors", "trace"]}
