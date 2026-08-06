@@ -41,6 +41,14 @@
 //! original status on the way out, so the client still sees the ordinary
 //! JSON-RPC error it expects. The response body is untouched.
 //!
+//! # Side effect of enabling payments
+//!
+//! With `X402_PAY_TO` set, every POST to `/mcp` is buffered in memory (up to
+//! 2 MB) so the JSON-RPC method can be read before routing — including free
+//! calls, which previously streamed straight through. Requests above that cap
+//! are refused with a JSON-RPC 413. Leaving payments off keeps the original
+//! zero-copy path.
+//!
 //! # Not billing twice for one payment
 //!
 //! A client that retries an in-flight or completed call — a dropped
@@ -260,6 +268,21 @@ impl NonceGuard {
         true
     }
 
+    /// Claims a nonce and returns a guard that releases it on drop unless
+    /// committed.
+    ///
+    /// Explicit release after the call can't run if the future is dropped —
+    /// and a client disconnecting mid-transcription is exactly the scenario
+    /// this exists for. Tying release to `Drop` makes cancellation safe:
+    /// nothing settled, so nothing is held.
+    pub fn claim_scoped(&self, nonce: &str) -> Option<NonceClaim> {
+        self.claim(nonce).then(|| NonceClaim {
+            guard: self.clone(),
+            nonce: nonce.to_string(),
+            committed: false,
+        })
+    }
+
     /// Gives a nonce back.
     ///
     /// The claim is taken *before* the payment layer runs, so concurrent
@@ -275,6 +298,33 @@ impl NonceGuard {
             Err(poisoned) => poisoned.into_inner(),
         };
         seen.remove(nonce);
+    }
+}
+
+/// A claimed nonce, released on drop unless [`NonceClaim::commit`] is called.
+///
+/// Held for the duration of a paid call. Committed only when the work
+/// executed *and* settled; every other outcome — payment failure, tool
+/// failure, transport error, or the future being cancelled — releases it, so
+/// a client can retry the same signed payload.
+pub struct NonceClaim {
+    guard: NonceGuard,
+    nonce: String,
+    committed: bool,
+}
+
+impl NonceClaim {
+    /// Keep the nonce: the work ran and the payment settled.
+    pub fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for NonceClaim {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.guard.release(&self.nonce);
+        }
     }
 }
 
@@ -536,19 +586,25 @@ where
             let request = Request::from_parts(parts, Body::from(bytes));
 
             match priced {
-                Some((tool, price)) => {
-                    tracing::debug!("x402: gating tools/call for `{tool}` (${price})");
+                Some((tool, _table_price)) => {
+                    // Deliberately not logging the table's price: billing uses
+                    // X402_PRICE_USD, so a hardcoded figure here would drift
+                    // from what is actually charged.
+                    tracing::debug!("x402: gating tools/call for `{tool}`");
 
                     // Refuse a replayed payment rather than doing — and
                     // settling — the same work twice.
-                    let claimed_nonce = request
+                    let presented_nonce = request
                         .headers()
                         .get("x-payment")
                         .and_then(|v| v.to_str().ok())
                         .and_then(payment_nonce);
-                    if let Some(nonce) = claimed_nonce.as_deref()
-                        && !nonces.claim(nonce)
-                    {
+                    // Held across the call; released on drop unless the work
+                    // settles, so cancellation can't strand it.
+                    let claim = presented_nonce
+                        .as_deref()
+                        .and_then(|nonce| nonces.claim_scoped(nonce));
+                    if presented_nonce.is_some() && claim.is_none() {
                         tracing::warn!("x402: refusing replayed payment nonce for `{tool}`");
                         return Ok(axum::response::IntoResponse::into_response((
                             axum::http::StatusCode::CONFLICT,
@@ -564,19 +620,8 @@ where
                         )));
                     }
 
-                    let claimed = claimed_nonce.clone();
-                    // Not `?`: a transport-level error would skip the release
-                    // below and hold the nonce for the full TTL, so a
-                    // legitimate retry would be rejected as a replay.
-                    let mut response = match paid.call(request).await {
-                        Ok(response) => response,
-                        Err(e) => {
-                            if let Some(nonce) = claimed.as_deref() {
-                                nonces.release(nonce);
-                            }
-                            return Err(e);
-                        }
-                    };
+                    // `?` is safe now: dropping `claim` releases the nonce.
+                    let mut response = paid.call(request).await?;
                     // Undo the 502 that McpFailureStatus used to stop
                     // settlement, so the client sees the JSON-RPC error it
                     // expects rather than a transport failure.
@@ -589,15 +634,13 @@ where
                         *response.status_mut() = status;
                         // Executed but the tool failed, so settlement was
                         // skipped — the caller paid nothing and may retry.
-                        if let Some(nonce) = claimed.as_deref() {
-                            nonces.release(nonce);
-                        }
-                    } else if !response.status().is_success() {
-                        // Payment verification failed upstream: nothing ran,
-                        // nothing settled. Don't burn the nonce.
-                        if let Some(nonce) = claimed.as_deref() {
-                            nonces.release(nonce);
-                        }
+                        // Leaving `claim` to drop releases the nonce.
+                    } else if response.status().is_success()
+                        && let Some(claim) = claim
+                    {
+                        // The only outcome that consumes the nonce: ran and
+                        // settled. Everything else releases on drop.
+                        claim.commit();
                     }
                     Ok(response)
                 }
@@ -891,5 +934,54 @@ mod review_fix_tests {
     fn is_error_outside_the_result_is_ignored() {
         let body = br#"{"jsonrpc":"2.0","id":1,"result":{"content":[]},"meta":{"isError":true}}"#;
         assert!(!body_reports_tool_failure(body));
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    /// A dropped claim must free the nonce. This is the cancellation path: a
+    /// client disconnecting mid-transcription settles nothing, so holding the
+    /// nonce would reject their retry for the full TTL.
+    #[test]
+    fn dropping_an_uncommitted_claim_releases_the_nonce() {
+        let guard = NonceGuard::default();
+        {
+            let claim = guard.claim_scoped("n1").expect("first claim");
+            assert!(guard.claim_scoped("n1").is_none(), "held while in scope");
+            drop(claim);
+        }
+        assert!(
+            guard.claim_scoped("n1").is_some(),
+            "a cancelled call must not strand the nonce"
+        );
+    }
+
+    /// Committing keeps it — the work ran and settled, so a replay is a
+    /// genuine double-charge attempt.
+    #[test]
+    fn a_committed_claim_keeps_the_nonce() {
+        let guard = NonceGuard::default();
+        guard.claim_scoped("n2").expect("first claim").commit();
+        assert!(
+            guard.claim_scoped("n2").is_none(),
+            "a settled payment must not be replayable"
+        );
+    }
+
+    /// Panicking mid-call still releases, since Drop runs while unwinding.
+    #[test]
+    fn a_claim_dropped_during_unwind_releases() {
+        let guard = NonceGuard::default();
+        let result = std::panic::catch_unwind({
+            let guard = guard.clone();
+            move || {
+                let _claim = guard.claim_scoped("n3").expect("first claim");
+                panic!("simulated failure mid-call");
+            }
+        });
+        assert!(result.is_err());
+        assert!(guard.claim_scoped("n3").is_some(), "unwind must release too");
     }
 }
