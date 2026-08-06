@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-08-06
+
+### Changed
+
+- **All dependencies to latest stable.** Headline: **rmcp 1.7 → 3.1**, plus
+  jsonwebtoken 9 → 11, sqlx 0.8 → 0.9, sha2 0.10 → 0.11, hmac 0.12 → 0.13,
+  clap 4.5 → 4.6, tokio 1.52 → 1.53 and the rest of the tree.
+- **MCP protocol support advances with rmcp 3.x.** The server now negotiates
+  the `2026-07-28` draft protocol version when a client offers it, emitting the
+  SEP-2322 `resultType` field for such peers while omitting it for older ones.
+  Existing clients on `2025-06-18` and earlier are unaffected.
+- Internally, `Content` became `ContentBlock` (matching the MCP 2025-11-25
+  `ContentBlock` union), paginated results gained `result_type`/`ttl_ms`/
+  `cache_scope`, and `ServerHandler::call_tool` now returns `CallToolResponse`.
+  No change to the tool surface — all nine tools behave as before.
+
+### Fixed
+
+- **JWT verification panicked instead of rejecting** when built against
+  jsonwebtoken 11. That release makes the crypto backend pluggable and its
+  default features select *neither* provider, so signature verification
+  resolved to a factory that panics. Only reachable in deployments using
+  Supabase auth (`SUPABASE_URL` set); the crate now selects `aws_lc_rs`
+  explicitly.
+- Postgres credit ledger builds against sqlx 0.9, whose `runtime-tokio-rustls`
+  feature was split into separate runtime and TLS features.
+
+### Added
+
+- **Test coverage for the paths that dependency upgrades break.** MCP
+  end-to-end suites drive the real binary over both stdio and streamable HTTP
+  (handshake on both protocol versions, tool list and schemas, tool calls,
+  error paths, sessions, SSE framing, CORS); a Postgres suite exercises the
+  credit ledger against a real database including a concurrency test that
+  parallel reserves cannot oversell; JWT tests sign and verify genuine ES256
+  and RS256 tokens; and Stripe webhook signatures are checked against a vector
+  generated independently of the `hmac` crate.
+- **CI** (`.github/workflows/ci.yml`) running clippy and the full suite on
+  Linux against a Postgres service container, plus macOS and Windows checks.
+
+### Note for packagers
+
+The minimum supported Rust version is now **1.94**, raised by sqlx 0.9.
+
 ## [0.8.0] - 2026-07-05
 
 ### Added
