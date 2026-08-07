@@ -1195,7 +1195,12 @@ mod real_failure_tests {
 
     #[tokio::test]
     async fn a_failed_call_grants_exactly_one_credit_to_the_payer() {
-        let store = crate::credits::new_store().await;
+        // Deliberately NOT `new_store()`: without DATABASE_URL that resolves to
+        // ./credits.json, the real ledger, and this test was silently topping
+        // up a production balance on every run.
+        let dir = std::env::temp_dir().join("x402-compensation-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let store = crate::credits::test_store(dir.join("credits.json"));
         let payer = "TestPayerForCompensation11111111111111111111";
         let key = wallet_key(payer);
         let before = crate::credits::balance(&store, &key).await;
