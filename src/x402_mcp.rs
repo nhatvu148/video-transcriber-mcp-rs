@@ -70,7 +70,7 @@ use x402_chain_solana::chain::Address;
 use x402_axum::facilitator_client::FacilitatorClient;
 use x402_axum::{StaticPriceTags, X402LayerBuilder, X402Middleware};
 // KnownNetworkSolana is what puts `USDC::solana_devnet()` in scope.
-use x402_chain_solana::{KnownNetworkSolana, V1SolanaExact};
+use x402_chain_solana::{KnownNetworkSolana, V2SolanaExact};
 use x402_types::networks::USDC;
 
 
@@ -144,8 +144,14 @@ pub const DEFAULT_PRICE_USD: &str = "0.20";
 pub const DEFAULT_FACILITATOR: &str = "https://facilitator.x402.rs";
 
 /// The concrete layer type produced by [`layer_from_env`].
+///
+/// x402 **v2**. v2 identifies the network by CAIP-2 chain id
+/// (`solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1` for devnet) rather than v1's
+/// `"solana-devnet"` name. Both halves of the payment path must agree on the
+/// version, so this moves in lockstep with the client in `x402-mcp-proxy` and
+/// with the `schemes` entry of whichever facilitator settles for us.
 pub type PaidLayer =
-    X402LayerBuilder<StaticPriceTags<x402_types::proto::v1::PriceTag>, Arc<FacilitatorClient>>;
+    X402LayerBuilder<StaticPriceTags<x402_types::proto::v2::PriceTag>, Arc<FacilitatorClient>>;
 
 /// Validated payment settings, or `None` when this deployment doesn't charge.
 ///
@@ -219,11 +225,21 @@ pub fn layer_from_env() -> Option<PaidLayer> {
 
     Some(
         X402Middleware::new(settings.facilitator.as_str())
-            // Verify up front, settle after the work — but see the module-level
-            // note: an MCP tool that fails still returns 200, so this does not
-            // currently spare the caller for a failed job.
-            .settle_after_execution()
-            .with_price_tag(V1SolanaExact::price_tag(settings.pay_to, amount)),
+            // Settle *before* the work. A payment is a signed Solana
+            // transaction, and its blockhash dies after ~60-90s — while x402
+            // advertises `maxTimeoutSeconds: 300`, promising more time than the
+            // chain allows. Settling afterwards therefore worked only for jobs
+            // shorter than the blockhash window: a 6s clip settled, a YouTube
+            // lecture failed `transaction_simulation` and was transcribed for
+            // free, with nothing distinguishing the two. Since transcription is
+            // slow by nature and long videos are the point of this product,
+            // settle-after was unusable.
+            //
+            // The caller is protected instead by [`McpFailureStatus`], which
+            // grants a compensation credit when the work fails — a ledger write
+            // rather than an on-chain refund, so it has no timing constraint.
+            .settle_before_execution()
+            .with_price_tag(V2SolanaExact::price_tag(settings.pay_to, amount)),
     )
 }
 
@@ -371,17 +387,64 @@ const TOOL_FAILED_HEADER: &str = "x-mcp-tool-failed";
 /// worse than mis-settling it.
 const MAX_INSPECTABLE_RESPONSE: usize = 64 * 1024 * 1024;
 
-/// Re-stamps an MCP tool failure as 502 so the payment layer above skips
-/// settlement. The router restores the real status afterwards.
+/// Compensates the caller when a paid tool call fails.
+///
+/// Payment now settles *before* execution (see [`layer_from_env`]), so a failed
+/// job cannot be un-charged by withholding settlement — the money has already
+/// moved. Refunding on-chain would mean this server holding a funded wallet and
+/// making payouts, which is a whole second payment system.
+///
+/// Instead the caller is granted one credit against [`crate::credits`], keyed by
+/// the paying wallet. A ledger write has no blockhash window, costs no fees, and
+/// reuses the same balance the Stripe path already spends from.
+///
+/// The failure *detection* is unchanged and still structural
+/// ([`body_reports_tool_failure`]) — only the consequence moved, from "skip
+/// settlement" to "grant a credit". The 502 re-stamp is kept because the router
+/// still uses it to restore the caller's real status, and because it keeps the
+/// response shape identical for clients that were built against the old
+/// behaviour.
 #[derive(Clone)]
 pub struct McpFailureStatus<S> {
     inner: S,
+    credits: Option<Arc<crate::credits::CreditStore>>,
 }
 
 impl<S> McpFailureStatus<S> {
-    pub fn new(inner: S) -> Self {
-        Self { inner }
+    /// `credits: None` disables compensation — the failure is still detected
+    /// and reported, but nothing is granted. Used where no ledger exists.
+    pub fn new(inner: S, credits: Option<Arc<crate::credits::CreditStore>>) -> Self {
+        Self { inner, credits }
     }
+}
+
+/// Ledger key for a paying wallet.
+///
+/// The credit ledger is keyed by an opaque identity string and already carries
+/// two kinds (`user:<uuid>` accounts, raw device ids). An x402 caller has no
+/// account, but it does have a wallet, which is stable across calls and costs
+/// nothing to establish — so it makes a third kind.
+pub fn wallet_key(payer: &str) -> String {
+    format!("wallet:{payer}")
+}
+
+/// The paying wallet, from the settlement the payment layer attached.
+///
+/// With `settle_before_execution` the middleware injects
+/// `Option<SettleResponse>` into the request extensions, and the settle
+/// response carries `payer`. Reading it here avoids deserializing the signed
+/// Solana transaction out of the `X-PAYMENT` header, which would drag
+/// `solana-sdk` into a server that otherwise never touches Solana.
+pub fn payer_from_extensions(request: &Request<Body>) -> Option<String> {
+    let settled = request
+        .extensions()
+        .get::<Option<x402_types::proto::SettleResponse>>()?
+        .as_ref()?;
+    settled
+        .0
+        .get("payer")
+        .and_then(|p| p.as_str())
+        .map(str::to_owned)
 }
 
 impl<S> Service<Request<Body>> for McpFailureStatus<S>
@@ -403,6 +466,10 @@ where
     fn call(&mut self, request: Request<Body>) -> Self::Future {
         let mut inner = self.inner.clone();
         std::mem::swap(&mut inner, &mut self.inner);
+        // Read before the request is consumed; the settlement extension is
+        // gone by the time the response comes back.
+        let payer = payer_from_extensions(&request);
+        let credits = self.credits.clone();
         Box::pin(async move {
             let response = inner.call(request).await?;
             if !response.status().is_success() {
@@ -460,6 +527,7 @@ where
             };
 
             if body_reports_tool_failure(&bytes) {
+                compensate(credits.as_deref(), payer.as_deref()).await;
                 let original = parts.status;
                 parts.status = axum::http::StatusCode::BAD_GATEWAY;
                 if let Ok(value) = axum::http::HeaderValue::from_str(original.as_str()) {
@@ -468,6 +536,33 @@ where
             }
             Ok(axum::response::Response::from_parts(parts, Body::from(bytes)))
         })
+    }
+}
+
+/// Grants one credit to the payer of a call whose work failed.
+///
+/// Deliberately best-effort and never fatal: the caller already has a failed
+/// tool call, and turning a bookkeeping problem into a second failure helps
+/// nobody. Every path that can't compensate logs loudly instead, because
+/// silently keeping money for undelivered work is the one outcome worth being
+/// noisy about.
+async fn compensate(credits: Option<&crate::credits::CreditStore>, payer: Option<&str>) {
+    match (credits, payer) {
+        (Some(store), Some(payer)) => {
+            let key = wallet_key(payer);
+            let balance = crate::credits::add(store, &key, 1).await;
+            tracing::info!(
+                "x402: paid tool call failed — granted 1 credit to {key} (balance {balance})"
+            );
+        }
+        (Some(_), None) => tracing::error!(
+            "x402: paid tool call failed but the settlement carried no payer — \
+             cannot compensate; the caller has been charged for nothing"
+        ),
+        (None, _) => tracing::error!(
+            "x402: paid tool call failed and no credit ledger is wired — \
+             cannot compensate; the caller has been charged for nothing"
+        ),
     }
 }
 
@@ -1045,6 +1140,75 @@ mod real_failure_tests {
     }
 
     /// An explicit null error must not read as a failure.
+    #[test]
+    fn wallet_keys_are_namespaced_away_from_accounts_and_devices() {
+        // The ledger is shared with `user:<uuid>` and raw device ids, so a
+        // wallet must not be able to collide with either.
+        let k = wallet_key("8Pnjr4698LvRn7563BUkpJcXCK7im6yK26cBS8kiqjjK");
+        assert_eq!(k, "wallet:8Pnjr4698LvRn7563BUkpJcXCK7im6yK26cBS8kiqjjK");
+        assert!(!k.starts_with("user:"));
+        assert!(k.contains(':'), "must stay namespaced");
+    }
+
+    fn request_with(ext: Option<Option<x402_types::proto::SettleResponse>>) -> Request<Body> {
+        let mut r = Request::new(Body::empty());
+        if let Some(v) = ext {
+            r.extensions_mut().insert(v);
+        }
+        r
+    }
+
+    #[test]
+    fn payer_is_read_from_a_completed_settlement() {
+        let settled = x402_types::proto::SettleResponse(serde_json::json!({
+            "success": true,
+            "payer": "8Pnjr4698LvRn7563BUkpJcXCK7im6yK26cBS8kiqjjK",
+            "network": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
+        }));
+        assert_eq!(
+            payer_from_extensions(&request_with(Some(Some(settled)))).as_deref(),
+            Some("8Pnjr4698LvRn7563BUkpJcXCK7im6yK26cBS8kiqjjK")
+        );
+    }
+
+    #[test]
+    fn no_settlement_means_no_payer() {
+        // `None` is what settle_after_execution injects, and a free call has no
+        // extension at all. Neither may be mistaken for a payer.
+        assert!(payer_from_extensions(&request_with(Some(None))).is_none());
+        assert!(payer_from_extensions(&request_with(None)).is_none());
+    }
+
+    #[test]
+    fn a_settlement_without_a_payer_field_yields_none() {
+        let settled = x402_types::proto::SettleResponse(serde_json::json!({"success": true}));
+        assert!(payer_from_extensions(&request_with(Some(Some(settled)))).is_none());
+    }
+
+    #[tokio::test]
+    async fn compensation_is_best_effort_and_never_panics() {
+        // Every un-compensatable combination must degrade to a log, not a
+        // second failure on top of the one the caller already has.
+        compensate(None, None).await;
+        compensate(None, Some("8Pnjr4698LvRn7563BUkpJcXCK7im6yK26cBS8kiqjjK")).await;
+    }
+
+    #[tokio::test]
+    async fn a_failed_call_grants_exactly_one_credit_to_the_payer() {
+        let store = crate::credits::new_store().await;
+        let payer = "TestPayerForCompensation11111111111111111111";
+        let key = wallet_key(payer);
+        let before = crate::credits::balance(&store, &key).await;
+
+        compensate(Some(&store), Some(payer)).await;
+
+        assert_eq!(
+            crate::credits::balance(&store, &key).await,
+            before + 1,
+            "a failed paid call must leave the caller whole"
+        );
+    }
+
     #[test]
     fn a_null_error_field_is_not_a_failure() {
         let body = br#"{"jsonrpc":"2.0","id":2,"error":null,"result":{"content":[]}}"#;

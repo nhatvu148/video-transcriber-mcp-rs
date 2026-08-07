@@ -186,13 +186,23 @@ async fn run_http_transport(host: &str, port: u16) -> Result<()> {
         &tower_http::map_response_body::MapResponseBodyLayer::new(axum::body::Body::new),
         mcp_service,
     );
+    // Built here rather than with the rest of AppState because the payment
+    // layer needs it too: a paid tool call that fails is compensated with a
+    // credit, and both paths must spend from the same ledger.
+    let credit_store = Arc::new(credits::new_store().await);
+
     let mcp_router: axum::Router = match x402_mcp::layer_from_env() {
         Some(layer) => {
-            // McpFailureStatus sits *under* the payment layer so a failed
-            // tool call reads as non-2xx there and settlement is skipped.
+            // McpFailureStatus sits *under* the payment layer so it sees the
+            // real tool result. Payment settles before execution, so it can no
+            // longer un-charge a failure by withholding settlement — it grants
+            // a compensation credit instead.
             let paid = tower::Layer::layer(
                 &layer,
-                x402_mcp::McpFailureStatus::new(mcp_service.clone()),
+                x402_mcp::McpFailureStatus::new(
+                    mcp_service.clone(),
+                    Some(credit_store.clone()),
+                ),
             );
             axum::Router::new()
                 .fallback_service(x402_mcp::X402McpRouter::new(mcp_service, paid))
@@ -230,7 +240,7 @@ async fn run_http_transport(host: &str, port: u16) -> Result<()> {
     let app_state = AppState {
         jobs: api::new_store(),
         engine: Arc::new(Mutex::new(TranscriberEngine::new())),
-        credits: credits::new_store().await,
+        credits: (*credit_store).clone(),
         jwks,
         pipeline_permits: Arc::new(Semaphore::new(max_concurrent)),
     };
