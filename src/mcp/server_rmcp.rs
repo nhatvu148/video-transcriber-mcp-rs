@@ -15,6 +15,14 @@ use crate::utils::paths::get_default_output_dir;
 #[derive(Clone)]
 pub struct VideoTranscriberServer {
     transcriber: Arc<Mutex<TranscriberEngine>>,
+    /// Appended to `transcribe_video`'s description, verbatim.
+    ///
+    /// A deployment that charges for this tool has to say so in the catalogue,
+    /// because an agent decides whether to call it from the description alone —
+    /// discovering the price via a 402 is too late. But *what* it costs, and
+    /// whether it costs anything, is deployment policy rather than protocol, so
+    /// the note is supplied from outside instead of computed here.
+    tool_note: Option<String>,
 }
 
 impl Default for VideoTranscriberServer {
@@ -27,27 +35,24 @@ impl VideoTranscriberServer {
     pub fn new() -> Self {
         Self {
             transcriber: Arc::new(Mutex::new(TranscriberEngine::new())),
+            tool_note: None,
         }
+    }
+
+    /// Append `note` to the `transcribe_video` description.
+    ///
+    /// Used by a deployment that gates the tool behind payment to advertise the
+    /// price up front. Left unset, the description is the plain one.
+    pub fn with_tool_note(mut self, note: impl Into<String>) -> Self {
+        self.tool_note = Some(note.into());
+        self
     }
 }
 
 
-/// Description for `transcribe_video`, with the price appended when the
-/// deployment charges for it.
-///
-/// Agents choose tools partly on cost, so a priced tool that doesn't say so
-/// gets called blind and the caller discovers the charge only via a 402.
-///
-/// Derives from the same validated settings the payment layer uses, so the
-/// catalogue can't advertise a price the gate doesn't enforce — re-reading the
-/// raw environment here meant a malformed `X402_PAY_TO` left calls free while
-/// the description still claimed a price.
-fn transcribe_video_description() -> String {
-    "Transcribe videos from 1000+ platforms (YouTube, Vimeo, TikTok, Twitter, etc.) \
-     or local video files using whisper.cpp (4-10x faster than Python whisper!). \
-     Downloads/extracts audio and generates transcript in TXT, JSON, and Markdown formats."
-        .to_string()
-}
+/// Base description for `transcribe_video`. Deployment-specific additions
+/// (e.g. a price) come from [`VideoTranscriberServer::with_tool_note`].
+const TRANSCRIBE_VIDEO_DESCRIPTION: &str = "Transcribe videos from 1000+ platforms (YouTube, Vimeo, TikTok, Twitter, etc.) or local video files using whisper.cpp (4-10x faster than Python whisper!). Downloads/extracts audio and generates transcript in TXT, JSON, and Markdown formats.";
 
 impl ServerHandler for VideoTranscriberServer {
     fn get_info(&self) -> ServerInfo {
@@ -82,7 +87,10 @@ impl ServerHandler for VideoTranscriberServer {
             // `..: None` boilerplate per tool.
             Tool::new(
                 "transcribe_video",
-                transcribe_video_description(),
+                match &self.tool_note {
+                    Some(note) => format!("{TRANSCRIBE_VIDEO_DESCRIPTION} {note}"),
+                    None => TRANSCRIBE_VIDEO_DESCRIPTION.to_string(),
+                },
                 Arc::new(
                     serde_json::from_value(json!({
                         "type": "object",
