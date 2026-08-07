@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
-[![crates.io](https://img.shields.io/badge/crates.io-v0.8.0-orange.svg)](https://crates.io/crates/video-transcriber-mcp)
+[![crates.io](https://img.shields.io/badge/crates.io-v0.10.0-orange.svg)](https://crates.io/crates/video-transcriber-mcp)
 
 A Model Context Protocol (MCP) server that transcribes videos from **1000+ platforms** using whisper.cpp. Built with Rust for maximum performance and efficiency.
 
@@ -75,9 +75,6 @@ Real-world performance depends on your hardware, video length, and chosen model.
 - 🎛️ **5 model sizes** (tiny, base, small, medium, large)
 - 🌐 **90+ languages** supported
 - 📝 **Multiple output formats** (TXT, JSON, Markdown)
-- 🧠 **AI study layer** (HTTP REST): Markdown summary + Mermaid diagram + key
-  takeaways, plus `/api/chat` (grounded Q&A), `/api/flashcards`, and
-  `/api/library-ask` (semantic search across a user's whole library via pgvector)
 - 🔌 **MCP integration** for Claude Code
 - 🌐 **Dual transport** - stdio (local) and Streamable HTTP (remote)
 - ⚡ **Native binary** - no Python or Node.js required
@@ -405,33 +402,6 @@ startup, so a `403` from a remote client is easy to diagnose.
 > money when remote Whisper / OpenRouter are configured. Put an
 > authenticating proxy in front of a public deployment.
 
-#### Which sites `/api/fetch-audio` will fetch
-
-`POST /api/fetch-audio` hands a caller-supplied URL to `yt-dlp`, so it is
-restricted to a list of hosts rather than accepting anything:
-
-```bash
-# Comma-separated suffixes, matched on a label boundary — so `youtube.com`
-# accepts `www.youtube.com` but not `evil-youtube.com`.
-export FETCH_AUDIO_ALLOWED_HOSTS=youtube.com,youtu.be,vimeo.com,tiktok.com,twitter.com,x.com,twitch.tv,coursera.org
-
-# On Fly:
-fly secrets set FETCH_AUDIO_ALLOWED_HOSTS=youtube.com,youtu.be
-```
-
-Unset uses that same default list. `*` allows any host.
-
-> ⚠️ `*` re-opens SSRF. The allowlist is what stops an attacker-controlled URL
-> redirecting `yt-dlp` to an internal address — IP checks alone can't, because
-> `yt-dlp` re-resolves DNS and follows redirects itself. Only use `*` alongside
-> egress filtering, or `yt-dlp --proxy` pointed at a filtering forward proxy.
-
-`POST /api/jobs` (the main transcribe path) is **not** allowlisted, because it
-is meant to accept the 1000+ sites `yt-dlp` supports. It refuses URLs that
-resolve to internal addresses, which stops the direct cases but not redirects
-or DNS rebinding. A public deployment of that endpoint wants egress filtering.
-
-[dns-rebinding]: https://en.wikipedia.org/wiki/DNS_rebinding
 
 #### Downloading (yt-dlp cookies)
 
@@ -478,25 +448,21 @@ RUST_LOG=debug cargo run -- --url "https://youtube.com/watch?v=example"
 ### Project Structure
 
 ```
-video-transcriber-mcp/
-├── src/
-│   ├── main.rs              # Entry point
-│   ├── mcp/                 # MCP server implementation
-│   │   ├── server.rs
-│   │   └── types.rs
-│   ├── transcriber/         # Core transcription logic
-│   │   ├── engine.rs        # Main transcription orchestrator
-│   │   ├── whisper.rs       # whisper.cpp integration
-│   │   ├── downloader.rs    # yt-dlp wrapper
-│   │   ├── audio.rs         # Audio processing
-│   │   └── types.rs         # Data structures
-│   └── utils/               # Utilities
-│       └── paths.rs
-├── scripts/                 # Helper scripts
-│   └── download-models.sh   # Download Whisper models
-├── Cargo.toml               # Rust dependencies
-└── README.md
+src/
+├── main.rs           # CLI + transport selection (stdio / streamable HTTP)
+├── lib.rs            # public API for embedders
+├── mcp/              # MCP server: tool definitions and handlers
+├── transcriber/      # the pipeline: yt-dlp → ffmpeg → whisper.cpp
+├── embeddings.rs     # passage embeddings, used by `search_transcripts`
+└── utils/            # paths
 ```
+
+This crate is only the transcription pipeline and its MCP surface. The product
+built on top of it — REST API, accounts, credits, payments, AI summaries and
+diagrams — lives in a separate private crate that depends on this one as a
+library, so `cargo install video-transcriber-mcp` gets you a transcription
+server rather than somebody else's SaaS backend.
+
 
 ## 🤝 Contributing
 

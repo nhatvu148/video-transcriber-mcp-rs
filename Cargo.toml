@@ -7,15 +7,12 @@ keywords = ["whisper", "transcription", "mcp", "video", "audio"]
 license = "MIT"
 name = "video-transcriber-mcp"
 repository = "https://github.com/nhatvu148/video-transcriber-mcp-rs"
-version = "0.9.0"
-
-# Keep the JWT test keys out of the published crate. They are throwaway
-# fixtures with no access to anything, but crates.io is public and permanent,
-# and files named `*-private.pem` sitting in a published package trip secret
-# scanners and alarm anyone auditing their dependency tree. `jwt_verify.rs`
-# goes with them since it can't run without its fixtures — both stay in git,
-# where the tests are actually run from.
-exclude = ["tests/fixtures/", "tests/jwt_verify.rs"]
+# 0.10 rather than 0.9.1: the library's public surface shrank. `api`, `auth`,
+# `credits`, `llm` and `x402_mcp` were public modules and are gone — they were
+# product, not protocol, and now live in a private crate that depends on this
+# one. Breaking for any library consumer, so it gets a minor bump under
+# pre-1.0 semver rather than a patch.
+version = "0.10.0"
 
 [[bin]]
 name = "video-transcriber-mcp"
@@ -23,95 +20,42 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0"
+# yt-dlp and ffmpeg are driven as subprocesses (transcriber/audio.rs, downloader.rs).
 async-process = "2.5"
-axum = {version = "0.8.9", features = ["multipart"]}
+# The HTTP transport's router. `axum::serve` in main.rs.
+axum = "0.8.9"
 chrono = "0.4"
 clap = { version = "4.6", features = ["derive"] }
 home = "0.5"
-# Deterministic pre-pass that repairs the most common structural mistakes in
-# LLM-generated Mermaid before it's stored (see sanitize_mermaid in llm.rs).
-regex = "1"
-reqwest = {version = "0.13", features = ["json", "multipart", "form", "rustls"], default-features = false}
-rmcp = {version = "3.1", features = ["server", "transport-io", "transport-streamable-http-server"]}
-serde = {version = "1.0", features = ["derive"]}
+# `multipart` is for uploading audio to a remote Whisper endpoint
+# (transcriber/whisper.rs), not for serving uploads.
+reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "rustls"] }
+rmcp = { version = "3.1", features = ["server", "transport-io", "transport-streamable-http-server"] }
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3.27"
 thiserror = "2.0"
-tokio = {version = "1.53", features = ["full"]}
-tokio-util = "0.7"
-hmac = "0.13"
-sha2 = "0.11"
-# JWT verification for Supabase Auth — used by the auth middleware to validate
-# tokens from the web/extension before crediting any operation.
-#
-# The `aws_lc_rs` feature is REQUIRED, not optional tuning. jsonwebtoken 11 made
-# the crypto backend pluggable and its default features select *neither*
-# provider, so a bare `jsonwebtoken = "11"` compiles and links fine, parses
-# headers fine, and rejects malformed tokens fine — then panics the moment it
-# verifies a real signature:
-#
-#   Could not automatically determine the process-level CryptoProvider
-#   from jsonwebtoken crate features.
-#
-# aws-lc-rs (rather than `rust_crypto`) because reqwest already pulls it in:
-# its `rustls` feature resolves to `__rustls-aws-lc-rs`, which turns on
-# rustls's aws-lc-rs backend. So this adds no new dependency and no new build
-# step, whereas `rust_crypto` would pull in 7 more crates including `rsa`.
-# Verify with: cargo tree -e features -i rustls
-#
-# Note this binary links *both* rustls backends — aws-lc-rs via reqwest as
-# above, and ring via sqlx's `tls-rustls-ring` below. That ambiguity is exactly
-# why jsonwebtoken can't pick a provider on its own and why the feature has to
-# be explicit here. Covered by tests/jwt_verify.rs — do not drop it.
-jsonwebtoken = {version = "11", features = ["aws_lc_rs"]}
-# Postgres-backed credit ledger (Supabase) when DATABASE_URL is set; falls back
-# to the JSON-on-disk store for standalone/forked deployments without a DB.
-# rustls (not native-tls) to match reqwest and avoid an OpenSSL build dep.
-# sqlx 0.9 split the old `runtime-tokio-rustls` feature into a runtime and a TLS
-# feature. `tls-rustls-ring` keeps sqlx on ring, matching what sqlx 0.8's
-# `runtime-tokio-rustls` used, and is verified against real Postgres over TLS.
-# (It does not avoid a second provider — reqwest independently enables rustls's
-# aws-lc-rs backend, so both are linked. See the jsonwebtoken note above.)
-sqlx = {version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "json"]}
-# x402 pay-per-call for the MCP endpoint (see src/x402_mcp.rs). The layer from
-# x402-axum handles the protocol — 402 challenges, facilitator verify/settle,
-# conformance checks — and our own layer only decides *which* JSON-RPC requests
-# reach it, since MCP puts every method behind one POST route.
-x402-axum = "2.0.2"
-x402-types = "2.0.2"
-# `server` is required: the crate defaults to no features, and
-# `V1SolanaExact::price_tag` lives behind `#[cfg(feature = "server")]`.
-# Without it the constructor simply doesn't exist and the build fails with a
-# confusing "no associated function" error.
-x402-chain-solana = {version = "2.0.2", features = ["server"]}
-tower = "0.5.3"
-tower_governor = "0.8"
-# map-response-body bridges rmcp's BoxBody responses to axum's Body,
-# which the x402 layer and Router::fallback_service both require.
-tower-http = {version = "0.7", features = ["cors", "trace", "map-response-body"]}
+tokio = { version = "1.53", features = ["full"] }
+# `cors` only. An HTTP MCP endpoint is commonly called from a browser client.
+tower-http = { version = "0.7", features = ["cors"] }
 tracing = "0.1"
-tracing-subscriber = {version = "0.3", features = ["env-filter"]}
-uuid = {version = "1.24", features = ["v4", "serde"]}
-walkdir = "2.5"
-base64 = "0.23"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.5"
 
 # Metal GPU acceleration on macOS (Apple Silicon). On other platforms we fall
 # back to plain CPU — change features there if you have CUDA / OpenBLAS / etc.
 [target.'cfg(target_os = "macos")'.dependencies]
-whisper-rs = {version = "0.16", features = ["metal"]}
+whisper-rs = { version = "0.16", features = ["metal"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 whisper-rs = "0.16"
 
 [dev-dependencies]
-base64 = "0.23"
-criterion = "0.8"
 # Integration tests in `tests/` can't see the crate's regular dependencies, so
 # the HTTP-transport e2e suite needs its own client + runtime. Same versions
 # and features as above, so cargo reuses the already-built artifacts.
-reqwest = {version = "0.13", features = ["json", "rustls"], default-features = false}
-tokio = {version = "1.53", features = ["full"]}
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+tokio = { version = "1.53", features = ["full"] }
 
 [profile.release]
 codegen-units = 1

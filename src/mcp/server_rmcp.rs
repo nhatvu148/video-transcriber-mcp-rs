@@ -15,6 +15,23 @@ use crate::utils::paths::get_default_output_dir;
 #[derive(Clone)]
 pub struct VideoTranscriberServer {
     transcriber: Arc<Mutex<TranscriberEngine>>,
+    /// Refuse `transcribe_video` URLs that resolve into our own network.
+    ///
+    /// Off by default because the default transport is stdio, where there is no
+    /// attacker: the caller already has a shell, and transcribing
+    /// `http://localhost:8000/lecture.mp4` from your own machine is a normal
+    /// thing to do. A remotely-reachable deployment turns it on — see
+    /// [`VideoTranscriberServer::with_url_guard`].
+    guard_urls: bool,
+
+    /// Appended to `transcribe_video`'s description, verbatim.
+    ///
+    /// A deployment that charges for this tool has to say so in the catalogue,
+    /// because an agent decides whether to call it from the description alone —
+    /// discovering the price via a 402 is too late. But *what* it costs, and
+    /// whether it costs anything, is deployment policy rather than protocol, so
+    /// the note is supplied from outside instead of computed here.
+    tool_note: Option<String>,
 }
 
 impl Default for VideoTranscriberServer {
@@ -27,35 +44,35 @@ impl VideoTranscriberServer {
     pub fn new() -> Self {
         Self {
             transcriber: Arc::new(Mutex::new(TranscriberEngine::new())),
+            guard_urls: false,
+            tool_note: None,
         }
     }
-}
 
+    /// Refuse URLs that resolve to loopback, private or link-local addresses.
+    ///
+    /// For deployments others can reach — anything serving `--transport http`.
+    /// Not the default: on stdio the caller owns the machine, so blocking
+    /// localhost would remove a legitimate use and prevent no attack.
+    pub fn with_url_guard(mut self) -> Self {
+        self.guard_urls = true;
+        self
+    }
 
-/// Description for `transcribe_video`, with the price appended when the
-/// deployment charges for it.
-///
-/// Agents choose tools partly on cost, so a priced tool that doesn't say so
-/// gets called blind and the caller discovers the charge only via a 402.
-///
-/// Derives from the same validated settings the payment layer uses, so the
-/// catalogue can't advertise a price the gate doesn't enforce — re-reading the
-/// raw environment here meant a malformed `X402_PAY_TO` left calls free while
-/// the description still claimed a price.
-fn transcribe_video_description() -> String {
-    const BASE: &str = "Transcribe videos from 1000+ platforms (YouTube, Vimeo, TikTok, Twitter, etc.) or local video files using whisper.cpp (4-10x faster than Python whisper!). Downloads/extracts audio and generates transcript in TXT, JSON, and Markdown formats.";
-
-    match crate::x402_mcp::payment_settings() {
-        None => BASE.to_string(),
-        Some(settings) => format!(
-            "{BASE} COST: ${} USDC per call ({}), paid via x402 — the server \
-             answers an unpaid call with HTTP 402 and payment instructions. \
-             All other tools on this server are free.",
-            settings.price,
-            settings.network()
-        ),
+    /// Append `note` to the `transcribe_video` description.
+    ///
+    /// Used by a deployment that gates the tool behind payment to advertise the
+    /// price up front. Left unset, the description is the plain one.
+    pub fn with_tool_note(mut self, note: impl Into<String>) -> Self {
+        self.tool_note = Some(note.into());
+        self
     }
 }
+
+
+/// Base description for `transcribe_video`. Deployment-specific additions
+/// (e.g. a price) come from [`VideoTranscriberServer::with_tool_note`].
+const TRANSCRIBE_VIDEO_DESCRIPTION: &str = "Transcribe videos from 1000+ platforms (YouTube, Vimeo, TikTok, Twitter, etc.) or local video files using whisper.cpp (4-10x faster than Python whisper!). Downloads/extracts audio and generates transcript in TXT, JSON, and Markdown formats.";
 
 impl ServerHandler for VideoTranscriberServer {
     fn get_info(&self) -> ServerInfo {
@@ -90,7 +107,10 @@ impl ServerHandler for VideoTranscriberServer {
             // `..: None` boilerplate per tool.
             Tool::new(
                 "transcribe_video",
-                transcribe_video_description(),
+                match &self.tool_note {
+                    Some(note) => format!("{TRANSCRIBE_VIDEO_DESCRIPTION} {note}"),
+                    None => TRANSCRIBE_VIDEO_DESCRIPTION.to_string(),
+                },
                 Arc::new(
                     serde_json::from_value(json!({
                         "type": "object",
@@ -307,6 +327,23 @@ impl VideoTranscriberServer {
                         )
                     })?
                     .to_string();
+
+                // Remote deployments only. `ANY_HOST` because this tool
+                // advertises 1000+ platforms, so its entry point genuinely
+                // cannot be enumerated — this closes the direct cases, not
+                // redirects. See `url_guard` for what that leaves open.
+                if self.guard_urls
+                    && let Err(msg) =
+                        crate::url_guard::reject_internal_url(&url, crate::url_guard::ANY_HOST)
+                            .await
+                {
+                    tracing::warn!("transcribe_video refused {url}: {msg}");
+                    return Err(ErrorData::new(
+                        ErrorCode::INVALID_PARAMS,
+                        msg.to_string(),
+                        None,
+                    ));
+                }
 
                 let output_dir = args
                     .get("output_dir")
@@ -1002,7 +1039,7 @@ impl VideoTranscriberServer {
                     )]));
                 }
 
-                let qvec = match crate::llm::embed(vec![query.clone()]).await {
+                let qvec = match crate::embeddings::embed(vec![query.clone()]).await {
                     Ok(mut v) if !v.is_empty() => v.remove(0),
                     _ => {
                         return Ok(CallToolResult::success(vec![ContentBlock::text(
