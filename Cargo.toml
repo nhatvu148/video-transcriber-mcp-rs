@@ -94,6 +94,7 @@ tracing-subscriber = {version = "0.3", features = ["env-filter"]}
 uuid = {version = "1.24", features = ["v4", "serde"]}
 walkdir = "2.5"
 base64 = "0.23"
+url = "2.5.8"
 
 # Metal GPU acceleration on macOS (Apple Silicon). On other platforms we fall
 # back to plain CPU — change features there if you have CUDA / OpenBLAS / etc.

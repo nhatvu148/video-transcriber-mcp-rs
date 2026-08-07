@@ -626,6 +626,98 @@ fn header_pct(s: &str) -> String {
 /// can't run yt-dlp themselves. 0 credits; auth required; duration-capped to
 /// bound egress + in-browser transcribe time. Metadata rides in headers so the
 /// browser can post it to /api/from-transcript for notes.
+/// True when an address belongs to the deployment's own network rather than the
+/// public internet.
+///
+/// Covers loopback, RFC1918 private space, link-local (which is where cloud
+/// metadata services live), carrier-grade NAT, and the IPv6 equivalents —
+/// including v4-mapped v6, since `::ffff:127.0.0.1` is otherwise a trivial
+/// bypass of a v4-only check.
+fn is_internal_ip(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_unspecified()
+                || v4.octets()[0] == 0
+                // 100.64.0.0/10 — carrier-grade NAT, used internally by some hosts
+                || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 64)
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                // fc00::/7 unique-local
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                // fe80::/10 link-local
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+                || v6
+                    .to_ipv4_mapped()
+                    .is_some_and(|v4| is_internal_ip(IpAddr::V4(v4)))
+        }
+    }
+}
+
+/// Rejects a caller-supplied URL that could reach our own network.
+///
+/// `fetch_audio` hands this URL to yt-dlp, which will fetch essentially
+/// anything. Without this check an authenticated caller can make the engine
+/// request loopback, private-range, link-local (cloud metadata) or Fly 6PN
+/// `.internal` addresses — and because the handler returned the raw error
+/// string, it worked as an oracle even when no audio came back.
+///
+/// A denylist rather than a host allowlist: Free mode is meant to cover the
+/// same platforms as Fast mode, so allowlisting hosts would be a product
+/// regression.
+///
+/// **Not airtight.** yt-dlp resolves DNS again when it fetches, so a name that
+/// flips between a public and a private answer between our check and its fetch
+/// (DNS rebinding) still gets through. Closing that needs egress filtering at
+/// the network layer. This stops the direct cases, which are the ones reachable
+/// by simply typing an address into the box.
+async fn reject_internal_url(raw: &str) -> Result<(), &'static str> {
+    const BAD_URL: &str = "a valid http(s) URL is required";
+    const UNREACHABLE: &str = "that host is not reachable";
+
+    let parsed = url::Url::parse(raw).map_err(|_| BAD_URL)?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(BAD_URL);
+    }
+    // A public video URL never needs credentials, and they are a standard way
+    // to confuse a downstream fetcher about which host it is really talking to.
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(BAD_URL);
+    }
+
+    let host = parsed.host_str().ok_or(BAD_URL)?;
+    // Fly's private network resolves `*.internal`. Checked by name because it
+    // may not resolve at all from every context, which would otherwise look
+    // like a lookup failure rather than a refusal.
+    let lower = host.to_ascii_lowercase();
+    if lower == "internal" || lower.ends_with(".internal") || lower.ends_with(".local") {
+        return Err(UNREACHABLE);
+    }
+
+    // Check *every* answer: a name with one public and one private record would
+    // otherwise pass on the strength of the public one.
+    let port = parsed.port_or_known_default().unwrap_or(443);
+    let mut resolved = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|_| UNREACHABLE)?
+        .peekable();
+    if resolved.peek().is_none() {
+        return Err(UNREACHABLE);
+    }
+    for addr in resolved {
+        if is_internal_ip(addr.ip()) {
+            return Err(UNREACHABLE);
+        }
+    }
+    Ok(())
+}
+
 pub async fn fetch_audio(
     State(state): State<AppState>,
     AuthUser(_claims): AuthUser,
@@ -635,12 +727,11 @@ pub async fn fetch_audio(
     const MAX_DURATION_SECS: u64 = 60 * 60;
 
     let url = body.url.trim().to_string();
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "a valid http(s) URL is required" })),
-        )
-            .into_response();
+    if let Err(msg) = reject_internal_url(&url).await {
+        // Logged with the URL, returned without it — the caller learns their
+        // request was refused, not what the network looks like from in here.
+        warn!("fetch_audio refused {url}: {msg}");
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))).into_response();
     }
 
     let tmp = match tempfile::tempdir() {
@@ -671,10 +762,13 @@ pub async fn fetch_audio(
             }
             Ok(_) => {}
             Err(e) => {
+                // Detail stays in the log. Returning `{e:#}` echoed whatever
+                // the fetched host said, which turns a refused request into a
+                // readable probe of anything reachable from this process.
                 error!("fetch_audio probe failed for {url}: {e:#}");
                 return (
                     StatusCode::BAD_GATEWAY,
-                    Json(json!({ "error": format!("Couldn't read video info: {e:#}") })),
+                    Json(json!({ "error": "Couldn't read video info from that URL" })),
                 )
                     .into_response();
             }
@@ -682,10 +776,11 @@ pub async fn fetch_audio(
         match eng.fetch_audio_16k(&url, &dir).await {
             Ok(r) => r,
             Err(e) => {
+                // Same reasoning as the probe path: detail to the log only.
                 error!("fetch_audio failed for {url}: {e:#}");
                 return (
                     StatusCode::BAD_GATEWAY,
-                    Json(json!({ "error": format!("Couldn't fetch audio: {e:#}") })),
+                    Json(json!({ "error": "Couldn't fetch audio from that URL" })),
                 )
                     .into_response();
             }
@@ -1362,4 +1457,114 @@ pub fn spawn_job_gc(jobs: JobStore) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod ssrf_tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().expect("test ip")
+    }
+
+    #[test]
+    fn loopback_private_and_link_local_are_internal() {
+        for s in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "172.16.0.1",
+            "192.168.1.1",
+            // The one that matters most: cloud metadata lives here.
+            "169.254.169.254",
+            "100.64.0.1", // carrier-grade NAT
+            "0.0.0.0",
+        ] {
+            assert!(is_internal_ip(ip(s)), "{s} must be treated as internal");
+        }
+    }
+
+    #[test]
+    fn ipv6_internal_forms_are_caught_including_v4_mapped() {
+        for s in [
+            "::1",
+            "fc00::1",
+            "fe80::1",
+            // ::ffff:127.0.0.1 is the classic bypass of a v4-only check.
+            "::ffff:127.0.0.1",
+            "::ffff:169.254.169.254",
+        ] {
+            assert!(is_internal_ip(ip(s)), "{s} must be treated as internal");
+        }
+    }
+
+    #[test]
+    fn public_addresses_are_allowed() {
+        for s in ["8.8.8.8", "1.1.1.1", "2001:4860:4860::8888"] {
+            assert!(!is_internal_ip(ip(s)), "{s} must be allowed");
+        }
+    }
+
+    // IP literals throughout: lookup_host resolves them without touching DNS,
+    // so these stay deterministic in CI.
+    #[tokio::test]
+    async fn internal_destinations_are_refused() {
+        for u in [
+            "http://127.0.0.1/x",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[::1]/x",
+            "http://[::ffff:127.0.0.1]/x",
+            "http://10.0.0.5:8080/api/jobs",
+        ] {
+            assert!(
+                reject_internal_url(u).await.is_err(),
+                "{u} must be refused"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn non_http_schemes_and_credentials_are_refused() {
+        for u in [
+            "ftp://8.8.8.8/x",
+            "file:///etc/passwd",
+            "gopher://8.8.8.8/",
+            // Credentials are never needed for a public video and are a
+            // standard way to confuse a downstream fetcher about the host.
+            "http://user:pass@8.8.8.8/x",
+            "not a url at all",
+        ] {
+            assert!(
+                reject_internal_url(u).await.is_err(),
+                "{u} must be refused"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn fly_private_networking_names_are_refused_without_resolving() {
+        for u in [
+            "http://whisgram.internal/",
+            "http://SOMEAPP.INTERNAL/x",
+            "http://printer.local/",
+        ] {
+            assert!(
+                reject_internal_url(u).await.is_err(),
+                "{u} must be refused"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_public_address_passes() {
+        assert!(reject_internal_url("https://8.8.8.8/video.mp4").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn the_refusal_message_does_not_describe_the_network() {
+        // The caller should learn "no", not what is reachable from in here.
+        let msg = reject_internal_url("http://169.254.169.254/").await.unwrap_err();
+        assert!(!msg.contains("169.254"), "must not echo the address: {msg}");
+        assert!(!msg.to_lowercase().contains("private"), "must not hint at topology: {msg}");
+    }
 }
