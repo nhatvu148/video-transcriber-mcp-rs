@@ -43,7 +43,7 @@ sudo mv video-transcriber-mcp /usr/local/bin/
 curl -L https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/latest/download/video-transcriber-mcp-aarch64-apple-darwin.tar.gz | tar xz
 sudo mv video-transcriber-mcp /usr/local/bin/
 
-# Linux (x86_64)
+# Linux (x86_64) — no ARM64 Linux build, see issue #13; use `cargo install`
 curl -L https://github.com/nhatvu148/video-transcriber-mcp-rs/releases/latest/download/video-transcriber-mcp-x86_64-unknown-linux-gnu.tar.gz | tar xz
 sudo mv video-transcriber-mcp /usr/local/bin/
 

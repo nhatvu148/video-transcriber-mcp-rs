@@ -45,6 +45,20 @@ case "$ARCH" in
         ;;
 esac
 
+# No ARM64 Linux binary is published — whisper.cpp's NEON path does not build
+# for that target (issue #13). Say so, rather than 404ing on a URL that will
+# never exist.
+if [ "$ARCH" = "aarch64" ] && [ "$OS" = "unknown-linux-gnu" ]; then
+    echo "❌ No prebuilt binary for ARM64 Linux."
+    echo ""
+    echo "   whisper.cpp does not currently compile for this target:"
+    echo "   https://github.com/nhatvu148/video-transcriber-mcp-rs/issues/13"
+    echo ""
+    echo "   Build from source instead:"
+    echo "     cargo install video-transcriber-mcp"
+    exit 1
+fi
+
 TARGET="${ARCH}-${OS}"
 ARCHIVE="${BINARY_NAME}-${TARGET}.tar.gz"
 DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${ARCHIVE}"

@@ -13,12 +13,9 @@ jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
-    # Targets flagged `experimental` are allowed to fail without blocking the
-    # release. Used for aarch64-unknown-linux-gnu, where whisper.cpp does not
-    # currently compile (see issue #13) — the failure stays visible in the run
-    # rather than being hidden, but one broken target no longer withholds the
-    # working artifacts for every other platform.
-    continue-on-error: ${{ matrix.experimental || false }}
+    # No target is allowed to fail. The `experimental` escape hatch existed for
+    # aarch64-unknown-linux-gnu, which is now removed outright (issue #13) — a
+    # target that cannot build should not be in the matrix pretending to.
     strategy:
       fail-fast: false
       matrix:
@@ -41,15 +38,22 @@ jobs:
             binary: video-transcriber-mcp
             use_cross: false
 
-          # Linux ARM64 (cross-compile)
-          # Experimental: whisper.cpp's ggml-cpu NEON path fails to build for
-          # ARM64 under the toolchain `cross` uses (issue #13). Marked so a
-          # failure here doesn't withhold the other platforms' binaries.
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            binary: video-transcriber-mcp
-            use_cross: true
-            experimental: true
+          # Linux ARM64 — REMOVED, see issue #13.
+          #
+          # whisper.cpp's ggml-cpu NEON path does not compile for ARM64 under
+          # Debian bookworm's GCC 12: the fp16 intrinsics need -march/+fp16
+          # flags the build never passes. Reproduced twice, including from a
+          # plain `docker build` on Apple Silicon.
+          #
+          # It was marked `experimental` so a failure wouldn't block the other
+          # platforms — which meant every release either quietly lacked this
+          # artifact or shipped one nobody had run. Dropping it says that
+          # plainly instead. Restore once #13 is fixed and the binary is
+          # actually verified.
+          # - os: ubuntu-latest
+          #   target: aarch64-unknown-linux-gnu
+          #   binary: video-transcriber-mcp
+          #   use_cross: true
 
           # Windows
           - os: windows-latest
