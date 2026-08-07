@@ -647,15 +647,39 @@ fn is_internal_ip(ip: std::net::IpAddr) -> bool {
                 || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 64)
         }
         IpAddr::V6(v6) => {
+            let seg = v6.segments();
+            // Several v6 forms embed a v4 address. Each is a way to smuggle an
+            // internal v4 target past a check that only understands v6.
+            let embedded_v4 = v6
+                .to_ipv4_mapped()
+                // 6to4: 2002:AABB:CCDD::/48 carries v4 AA.BB.CC.DD
+                .or_else(|| {
+                    (seg[0] == 0x2002).then(|| {
+                        std::net::Ipv4Addr::new(
+                            (seg[1] >> 8) as u8,
+                            seg[1] as u8,
+                            (seg[2] >> 8) as u8,
+                            seg[2] as u8,
+                        )
+                    })
+                })
+                // Teredo: 2001:0000:/32, client v4 in the last two groups,
+                // stored bitwise-complemented.
+                .or_else(|| {
+                    (seg[0] == 0x2001 && seg[1] == 0).then(|| {
+                        let a = !seg[6];
+                        let b = !seg[7];
+                        std::net::Ipv4Addr::new((a >> 8) as u8, a as u8, (b >> 8) as u8, b as u8)
+                    })
+                });
+
             v6.is_loopback()
                 || v6.is_unspecified()
                 // fc00::/7 unique-local
-                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                || (seg[0] & 0xfe00) == 0xfc00
                 // fe80::/10 link-local
-                || (v6.segments()[0] & 0xffc0) == 0xfe80
-                || v6
-                    .to_ipv4_mapped()
-                    .is_some_and(|v4| is_internal_ip(IpAddr::V4(v4)))
+                || (seg[0] & 0xffc0) == 0xfe80
+                || embedded_v4.is_some_and(|v4| is_internal_ip(IpAddr::V4(v4)))
         }
     }
 }
@@ -668,18 +692,54 @@ fn is_internal_ip(ip: std::net::IpAddr) -> bool {
 /// `.internal` addresses — and because the handler returned the raw error
 /// string, it worked as an oracle even when no audio came back.
 ///
-/// A denylist rather than a host allowlist: Free mode is meant to cover the
-/// same platforms as Fast mode, so allowlisting hosts would be a product
-/// regression.
+/// # Why the allowlist is the control that matters
 ///
-/// **Not airtight.** yt-dlp resolves DNS again when it fetches, so a name that
-/// flips between a public and a private answer between our check and its fetch
-/// (DNS rebinding) still gets through. Closing that needs egress filtering at
-/// the network layer. This stops the direct cases, which are the ones reachable
-/// by simply typing an address into the box.
-async fn reject_internal_url(raw: &str) -> Result<(), &'static str> {
+/// The IP checks below only describe where the *submitted* hostname resolves.
+/// yt-dlp then fetches independently: it re-resolves DNS and follows HTTP
+/// redirects. So a public, attacker-controlled URL that answers `302` with
+/// `Location: http://169.254.169.254/...` walks straight past every IP check
+/// here, with no race to win. Redirects are far easier to exploit than the DNS
+/// rebinding case, and validating redirect hops ourselves does not help — an
+/// attacker serves a benign response to our probe and the redirect to yt-dlp.
+///
+/// The host allowlist is what actually closes this, because it removes the
+/// attacker-controlled entry point. The IP checks remain as defence in depth
+/// and as the whole control when the allowlist is disabled.
+///
+/// `FETCH_AUDIO_ALLOWED_HOSTS` — comma-separated suffixes, defaults to the
+/// platforms Free mode serves. Set it to `*` to allow any host, which restores
+/// the redirect exposure and should only be paired with egress filtering at the
+/// network layer.
+const DEFAULT_ALLOWED_HOSTS: &str = "youtube.com,youtu.be,vimeo.com,dailymotion.com";
+
+fn allowed_hosts_config() -> String {
+    std::env::var("FETCH_AUDIO_ALLOWED_HOSTS")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_ALLOWED_HOSTS.to_string())
+}
+
+/// Pure so tests can pass a config directly. Reading the environment inside
+/// made every test that varied it share process-global state, which is a CI
+/// flake waiting to happen under parallel execution.
+fn host_is_allowed_by(host: &str, configured: &str) -> bool {
+    if configured.trim() == "*" {
+        return true;
+    }
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    configured
+        .split(',')
+        .map(|s| s.trim().trim_start_matches('.').to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        // Suffix match on a label boundary, so `evil-youtube.com` and
+        // `youtube.com.attacker.net` do not pass as `youtube.com`.
+        .any(|allowed| host == allowed || host.ends_with(&format!(".{allowed}")))
+}
+
+async fn reject_internal_url(raw: &str, allowed: &str) -> Result<(), &'static str> {
     const BAD_URL: &str = "a valid http(s) URL is required";
     const UNREACHABLE: &str = "that host is not reachable";
+    const NOT_SUPPORTED: &str = "that site isn't supported in Free mode — use Fast mode";
 
     let parsed = url::Url::parse(raw).map_err(|_| BAD_URL)?;
     if !matches!(parsed.scheme(), "http" | "https") {
@@ -698,6 +758,12 @@ async fn reject_internal_url(raw: &str) -> Result<(), &'static str> {
     let lower = host.to_ascii_lowercase();
     if lower == "internal" || lower.ends_with(".internal") || lower.ends_with(".local") {
         return Err(UNREACHABLE);
+    }
+
+    // The control that survives redirects. Checked before the IP work because
+    // it is both cheaper and stronger.
+    if !host_is_allowed_by(host, allowed) {
+        return Err(NOT_SUPPORTED);
     }
 
     // Check *every* answer: a name with one public and one private record would
@@ -727,7 +793,7 @@ pub async fn fetch_audio(
     const MAX_DURATION_SECS: u64 = 60 * 60;
 
     let url = body.url.trim().to_string();
-    if let Err(msg) = reject_internal_url(&url).await {
+    if let Err(msg) = reject_internal_url(&url, &allowed_hosts_config()).await {
         // Logged with the URL, returned without it — the caller learns their
         // request was refused, not what the network looks like from in here.
         warn!("fetch_audio refused {url}: {msg}");
@@ -1517,7 +1583,7 @@ mod ssrf_tests {
             "http://10.0.0.5:8080/api/jobs",
         ] {
             assert!(
-                reject_internal_url(u).await.is_err(),
+                reject_internal_url(u, "*").await.is_err(),
                 "{u} must be refused"
             );
         }
@@ -1535,7 +1601,7 @@ mod ssrf_tests {
             "not a url at all",
         ] {
             assert!(
-                reject_internal_url(u).await.is_err(),
+                reject_internal_url(u, "*").await.is_err(),
                 "{u} must be refused"
             );
         }
@@ -1549,22 +1615,63 @@ mod ssrf_tests {
             "http://printer.local/",
         ] {
             assert!(
-                reject_internal_url(u).await.is_err(),
+                reject_internal_url(u, "*").await.is_err(),
                 "{u} must be refused"
             );
         }
     }
 
     #[tokio::test]
-    async fn a_public_address_passes() {
-        assert!(reject_internal_url("https://8.8.8.8/video.mp4").await.is_ok());
+    async fn an_allowed_public_host_passes_every_check() {
+        // IP literal + a config naming it, so the positive path is exercised
+        // end-to-end without depending on DNS in CI.
+        assert!(reject_internal_url("https://8.8.8.8/video.mp4", "8.8.8.8").await.is_ok());
     }
 
     #[tokio::test]
     async fn the_refusal_message_does_not_describe_the_network() {
         // The caller should learn "no", not what is reachable from in here.
-        let msg = reject_internal_url("http://169.254.169.254/").await.unwrap_err();
+        let msg = reject_internal_url("http://169.254.169.254/", "*").await.unwrap_err();
         assert!(!msg.contains("169.254"), "must not echo the address: {msg}");
         assert!(!msg.to_lowercase().contains("private"), "must not hint at topology: {msg}");
+    }
+
+    #[test]
+    fn allowlist_matches_on_a_label_boundary() {
+        let cfg = DEFAULT_ALLOWED_HOSTS;
+        for good in ["youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"] {
+            assert!(host_is_allowed_by(good, cfg), "{good} should be allowed");
+        }
+        // Naive suffix matching lets every one of these through.
+        for bad in [
+            "evil-youtube.com",
+            "youtube.com.attacker.net",
+            "notyoutube.com",
+            "attacker.net",
+            "169.254.169.254",
+        ] {
+            assert!(!host_is_allowed_by(bad, cfg), "{bad} must NOT be allowed");
+        }
+    }
+
+    #[test]
+    fn allowlist_is_configurable_and_star_disables_it() {
+        assert!(host_is_allowed_by("videos.example.org", "example.org"));
+        assert!(
+            !host_is_allowed_by("youtube.com", "example.org"),
+            "the default set must not leak through a custom config"
+        );
+        assert!(host_is_allowed_by("anything.at.all", "*"));
+    }
+
+    #[tokio::test]
+    async fn an_unlisted_host_is_refused_even_though_it_is_public() {
+        // The control that survives redirects: an attacker-controlled public
+        // host never reaches yt-dlp, so it cannot 302 to metadata.
+        assert!(
+            reject_internal_url("https://8.8.8.8/vid.mp4", DEFAULT_ALLOWED_HOSTS)
+                .await
+                .is_err()
+        );
     }
 }
