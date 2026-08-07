@@ -151,7 +151,7 @@ impl TranscriberEngine {
             .map(|v| !v.trim().is_empty())
             .unwrap_or(false)
         {
-            match crate::llm::embed_chunks(&segments).await {
+            match crate::embeddings::embed_chunks(&segments).await {
                 Ok(c) => {
                     if !c.is_empty() {
                         info!("🔎 Embedded {} chunk(s) for local search", c.len());
@@ -242,7 +242,7 @@ impl TranscriberEngine {
         metadata: &VideoMetadata,
         transcript: &str,
         segments: &[Segment],
-        chunks: &[crate::llm::EmbeddedChunk],
+        chunks: &[crate::embeddings::EmbeddedChunk],
         output_dir: &str,
         model: WhisperModel,
     ) -> Result<OutputFiles> {

@@ -43,18 +43,10 @@ impl VideoTranscriberServer {
 /// raw environment here meant a malformed `X402_PAY_TO` left calls free while
 /// the description still claimed a price.
 fn transcribe_video_description() -> String {
-    const BASE: &str = "Transcribe videos from 1000+ platforms (YouTube, Vimeo, TikTok, Twitter, etc.) or local video files using whisper.cpp (4-10x faster than Python whisper!). Downloads/extracts audio and generates transcript in TXT, JSON, and Markdown formats.";
-
-    match crate::x402_mcp::payment_settings() {
-        None => BASE.to_string(),
-        Some(settings) => format!(
-            "{BASE} COST: ${} USDC per call ({}), paid via x402 — the server \
-             answers an unpaid call with HTTP 402 and payment instructions. \
-             All other tools on this server are free.",
-            settings.price,
-            settings.network()
-        ),
-    }
+    "Transcribe videos from 1000+ platforms (YouTube, Vimeo, TikTok, Twitter, etc.) \
+     or local video files using whisper.cpp (4-10x faster than Python whisper!). \
+     Downloads/extracts audio and generates transcript in TXT, JSON, and Markdown formats."
+        .to_string()
 }
 
 impl ServerHandler for VideoTranscriberServer {
@@ -1002,7 +994,7 @@ impl VideoTranscriberServer {
                     )]));
                 }
 
-                let qvec = match crate::llm::embed(vec![query.clone()]).await {
+                let qvec = match crate::embeddings::embed(vec![query.clone()]).await {
                     Ok(mut v) if !v.is_empty() => v.remove(0),
                     _ => {
                         return Ok(CallToolResult::success(vec![ContentBlock::text(
