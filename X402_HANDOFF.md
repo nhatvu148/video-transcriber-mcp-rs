@@ -548,7 +548,26 @@ volatile asset makes both revenue and the caller's cost drift.
    so it needs balance monitoring.
 4. **Pricing** — `$0.20` flat per `transcribe_video`, regardless of video
    length. Fine for now; revisit if long videos dominate cost.
-5. **Spend cap granularity** — the proxy caps the *number* of settlements
+5. **Wallet-keyed credits cannot be spent — the compensation is not yet a
+   refund.** `McpFailureStatus` records `wallet:<payer>` when paid work fails,
+   but `api::handlers::resolve_identity` requires a valid Supabase JWT and
+   returns `user:<sub>`; the non-account fallback was deliberately removed as a
+   security hole. So the balance is real and unredeemable.
+
+   The debt is recorded anyway because the payer is only identifiable at that
+   moment — a redemption path added later can honour balances accrued in the
+   meantime, whereas dropping them loses them for good.
+
+   Closing it needs a way for a Solana payer to prove wallet ownership: sign a
+   challenge to link `wallet:<pubkey>` to an account, or to spend directly.
+   Note the paid path can't simply check a balance first — under x402 the 402
+   challenge precedes any identification of the caller, so a "spend a credit
+   instead of paying" flow needs the caller to identify *before* the charge.
+
+   **Until this is resolved, do not describe callers as compensated.** They are
+   owed. The server logs a `warn` saying exactly that on every occurrence.
+
+6. **Spend cap granularity** — the proxy caps the *number* of settlements
    (default 10), not a dollar amount, because `x402-reqwest` settles
    transparently and the amount isn't surfaced at the call site. With a single
    flat price that's equivalent; with per-tool or length-based pricing it stops

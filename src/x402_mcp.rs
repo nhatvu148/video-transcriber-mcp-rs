@@ -27,21 +27,32 @@
 //! Payment is not authorization. Settling a call buys that one call and
 //! nothing else.
 //!
-//! # Not billing for failed work
+//! # Failed work, and why settlement happens first
 //!
-//! `settle_after_execution` skips settlement only when the response carries a
-//! non-2xx status (`paygate.rs`: `is_client_error() || is_server_error()`),
-//! but MCP reports tool failures as **HTTP 200** with `isError: true` in the
-//! body. Left alone, a failed transcription settles and the caller pays for
-//! nothing.
+//! Settlement runs **before** execution. A payment is a signed Solana
+//! transaction whose blockhash dies after ~60-90s, while x402 advertises
+//! `maxTimeoutSeconds: 300` — the protocol promises more time than the chain
+//! allows. Settling afterwards therefore only worked for jobs shorter than the
+//! blockhash window: measured against a live facilitator, a 6s clip settled
+//! and a 582s video failed `transaction_simulation` and was transcribed for
+//! free, with nothing distinguishing the two. Long lectures are the product,
+//! so settle-after was unusable.
 //!
-//! Since x402 decides on status alone, [`McpFailureStatus`] sits *between* the
-//! payment layer and the MCP service and re-stamps a failed call as 502, which
-//! makes x402 skip settlement. "Failed" covers both shapes MCP uses: an
-//! in-band `result.isError`, and a top-level JSON-RPC `error` — which is what
-//! this server's handlers actually return. The router then restores the
-//! original status on the way out, so the client still sees the ordinary
-//! JSON-RPC error it expects. The response body is untouched.
+//! That means a failed job has already been charged, and the older mechanism —
+//! withholding settlement — is no longer available. [`McpFailureStatus`]
+//! instead sits *between* the payment layer and the MCP service, detects the
+//! failure, and records a credit for the payer.
+//!
+//! Detection matters because MCP reports tool failures as **HTTP 200** with
+//! `isError: true` in the body, so status alone never revealed them. "Failed"
+//! covers both shapes MCP uses: an in-band `result.isError`, and a top-level
+//! JSON-RPC `error` — which is what this server's handlers actually return.
+//! The 502 re-stamp is retained and the router restores the original status on
+//! the way out, so the client still sees the ordinary JSON-RPC error it
+//! expects. The response body is untouched.
+//!
+//! **The recorded credit is not yet spendable** — see [`compensate`]. The debt
+//! is tracked; the caller is not yet made whole.
 //!
 //! # Side effect of enabling payments
 //!
@@ -235,9 +246,12 @@ pub fn layer_from_env() -> Option<PaidLayer> {
             // slow by nature and long videos are the point of this product,
             // settle-after was unusable.
             //
-            // The caller is protected instead by [`McpFailureStatus`], which
-            // grants a compensation credit when the work fails — a ledger write
-            // rather than an on-chain refund, so it has no timing constraint.
+            // In exchange, a failed job has already been charged.
+            // [`McpFailureStatus`] records a credit for the payer — a ledger
+            // write rather than an on-chain refund, so it has no timing
+            // constraint. Note that credit is **not yet spendable** (see
+            // [`compensate`]): the debt is recorded, the caller is not yet made
+            // whole.
             .settle_before_execution()
             .with_price_tag(V2SolanaExact::price_tag(settings.pay_to, amount)),
     )
@@ -539,20 +553,42 @@ where
     }
 }
 
-/// Grants one credit to the payer of a call whose work failed.
+/// Records one credit against the payer of a call whose work failed.
+///
+/// # This is not yet a refund
+///
+/// The credit is written, but **nothing can currently spend it**.
+/// `api::handlers::resolve_identity` requires a valid Supabase JWT and returns
+/// a `user:<sub>` key; falling back to a non-account identity was deliberately
+/// removed as a security hole. A `wallet:` key therefore has no redemption
+/// path, so this is correct bookkeeping and an unredeemable balance — not a
+/// caller made whole.
+///
+/// It is written anyway because the debt is real and the payer is only
+/// identifiable at this moment: recording it now means a redemption path added
+/// later can honour balances accrued in the meantime, whereas dropping it
+/// loses them permanently.
+///
+/// Closing the gap needs a way for a Solana payer to prove wallet ownership —
+/// signing a challenge to link `wallet:<pubkey>` to an account, or to spend
+/// directly. That is a product decision, tracked in `X402_HANDOFF.md` §8.
 ///
 /// Deliberately best-effort and never fatal: the caller already has a failed
 /// tool call, and turning a bookkeeping problem into a second failure helps
-/// nobody. Every path that can't compensate logs loudly instead, because
-/// silently keeping money for undelivered work is the one outcome worth being
-/// noisy about.
+/// nobody. Every path that can't record logs loudly instead, because silently
+/// keeping money for undelivered work is the one outcome worth being noisy
+/// about.
 async fn compensate(credits: Option<&crate::credits::CreditStore>, payer: Option<&str>) {
     match (credits, payer) {
         (Some(store), Some(payer)) => {
             let key = wallet_key(payer);
             let balance = crate::credits::add(store, &key, 1).await;
-            tracing::info!(
-                "x402: paid tool call failed — granted 1 credit to {key} (balance {balance})"
+            // warn, not info: money was taken for work not delivered, and the
+            // credit standing in for it cannot yet be spent.
+            tracing::warn!(
+                "x402: paid tool call failed — recorded 1 credit for {key} (balance {balance}). \
+                 NOTE: wallet-keyed credits have no redemption path yet, so the payer is owed \
+                 but not yet refunded"
             );
         }
         (Some(_), None) => tracing::error!(
@@ -750,9 +786,16 @@ where
                         && let Ok(status) = axum::http::StatusCode::from_u16(original)
                     {
                         *response.status_mut() = status;
-                        // Executed but the tool failed, so settlement was
-                        // skipped — the caller paid nothing and may retry.
-                        // Leaving `claim` to drop releases the nonce.
+                        // Executed but the tool failed. Under settle-before the
+                        // caller HAS paid — `McpFailureStatus` compensates with
+                        // a credit rather than by withholding settlement.
+                        //
+                        // Leaving `claim` to drop still releases the nonce, and
+                        // that is still safe: replaying this payment cannot buy
+                        // a second execution, because settlement now runs first
+                        // and the transaction is already spent on-chain, so the
+                        // facilitator rejects it before the tool is reached. A
+                        // genuine retry needs a fresh payment either way.
                     } else if response.status().is_success()
                         && let Some(claim) = claim
                     {
@@ -1194,7 +1237,7 @@ mod real_failure_tests {
     }
 
     #[tokio::test]
-    async fn a_failed_call_grants_exactly_one_credit_to_the_payer() {
+    async fn a_failed_call_records_exactly_one_credit_for_the_payer() {
         // Deliberately NOT `new_store()`: without DATABASE_URL that resolves to
         // ./credits.json, the real ledger, and this test was silently topping
         // up a production balance on every run.
@@ -1210,7 +1253,7 @@ mod real_failure_tests {
         assert_eq!(
             crate::credits::balance(&store, &key).await,
             before + 1,
-            "a failed paid call must leave the caller whole"
+            "a failed paid call must record the debt, even though it is not yet spendable"
         );
     }
 
