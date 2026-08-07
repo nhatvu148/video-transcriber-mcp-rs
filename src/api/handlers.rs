@@ -895,9 +895,24 @@ pub async fn fetch_audio(
 /// public host redirecting to an internal one, because yt-dlp follows redirects
 /// itself.
 ///
-/// Closing that on this path requires egress filtering at the network layer.
-/// "Fetch arbitrary user-supplied URLs with yt-dlp" and "no SSRF" cannot both
-/// hold in application code alone.
+/// The same gap covers DNS rebinding: yt-dlp re-resolves the hostname moments
+/// after this check, so a record that flips from a public address to
+/// `169.254.169.254` in between defeats it.
+///
+/// **Pinning the resolved IP does not fix this, and is not available anyway.**
+/// yt-dlp has no `--resolve` equivalent — `yt-dlp --help` offers only `--proxy`
+/// and `--source-address`. Even with one, pinning would constrain the first hop
+/// only: yt-dlp follows redirects to CDN hosts whose addresses are unrelated to
+/// the page URL, so a pin strict enough to be a control would break ordinary
+/// playback.
+///
+/// The two things that actually work:
+/// - `--proxy` pointed at a filtering forward proxy that rejects internal
+///   destinations on every hop, or
+/// - egress rules at the network layer.
+///
+/// Both sit outside this process. "Fetch arbitrary user-supplied URLs with
+/// yt-dlp" and "no SSRF" cannot both hold in application code alone.
 const ANY_HOST: &str = "*";
 
 pub async fn create_job(
