@@ -31,6 +31,32 @@ impl VideoTranscriberServer {
     }
 }
 
+
+/// Description for `transcribe_video`, with the price appended when the
+/// deployment charges for it.
+///
+/// Agents choose tools partly on cost, so a priced tool that doesn't say so
+/// gets called blind and the caller discovers the charge only via a 402.
+///
+/// Derives from the same validated settings the payment layer uses, so the
+/// catalogue can't advertise a price the gate doesn't enforce — re-reading the
+/// raw environment here meant a malformed `X402_PAY_TO` left calls free while
+/// the description still claimed a price.
+fn transcribe_video_description() -> String {
+    const BASE: &str = "Transcribe videos from 1000+ platforms (YouTube, Vimeo, TikTok, Twitter, etc.) or local video files using whisper.cpp (4-10x faster than Python whisper!). Downloads/extracts audio and generates transcript in TXT, JSON, and Markdown formats.";
+
+    match crate::x402_mcp::payment_settings() {
+        None => BASE.to_string(),
+        Some(settings) => format!(
+            "{BASE} COST: ${} USDC per call ({}), paid via x402 — the server \
+             answers an unpaid call with HTTP 402 and payment instructions. \
+             All other tools on this server are free.",
+            settings.price,
+            settings.network()
+        ),
+    }
+}
+
 impl ServerHandler for VideoTranscriberServer {
     fn get_info(&self) -> ServerInfo {
         // rmcp marks InitializeResult as #[non_exhaustive], so the
@@ -64,7 +90,7 @@ impl ServerHandler for VideoTranscriberServer {
             // `..: None` boilerplate per tool.
             Tool::new(
                 "transcribe_video",
-                "Transcribe videos from 1000+ platforms (YouTube, Vimeo, TikTok, Twitter, etc.) or local video files using whisper.cpp (4-10x faster than Python whisper!). Downloads/extracts audio and generates transcript in TXT, JSON, and Markdown formats.",
+                transcribe_video_description(),
                 Arc::new(
                     serde_json::from_value(json!({
                         "type": "object",

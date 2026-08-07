@@ -73,13 +73,27 @@ jsonwebtoken = {version = "11", features = ["aws_lc_rs"]}
 # (It does not avoid a second provider — reqwest independently enables rustls's
 # aws-lc-rs backend, so both are linked. See the jsonwebtoken note above.)
 sqlx = {version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "json"]}
+# x402 pay-per-call for the MCP endpoint (see src/x402_mcp.rs). The layer from
+# x402-axum handles the protocol — 402 challenges, facilitator verify/settle,
+# conformance checks — and our own layer only decides *which* JSON-RPC requests
+# reach it, since MCP puts every method behind one POST route.
+x402-axum = "2.0.2"
+x402-types = "2.0.2"
+# `server` is required: the crate defaults to no features, and
+# `V1SolanaExact::price_tag` lives behind `#[cfg(feature = "server")]`.
+# Without it the constructor simply doesn't exist and the build fails with a
+# confusing "no associated function" error.
+x402-chain-solana = {version = "2.0.2", features = ["server"]}
 tower = "0.5.3"
 tower_governor = "0.8"
-tower-http = {version = "0.7", features = ["cors", "trace"]}
+# map-response-body bridges rmcp's BoxBody responses to axum's Body,
+# which the x402 layer and Router::fallback_service both require.
+tower-http = {version = "0.7", features = ["cors", "trace", "map-response-body"]}
 tracing = "0.1"
 tracing-subscriber = {version = "0.3", features = ["env-filter"]}
 uuid = {version = "1.24", features = ["v4", "serde"]}
 walkdir = "2.5"
+base64 = "0.23"
 
 # Metal GPU acceleration on macOS (Apple Silicon). On other platforms we fall
 # back to plain CPU — change features there if you have CUDA / OpenBLAS / etc.
@@ -90,6 +104,7 @@ whisper-rs = {version = "0.16", features = ["metal"]}
 whisper-rs = "0.16"
 
 [dev-dependencies]
+base64 = "0.23"
 criterion = "0.8"
 # Integration tests in `tests/` can't see the crate's regular dependencies, so
 # the HTTP-transport e2e suite needs its own client + runtime. Same versions

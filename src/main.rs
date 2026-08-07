@@ -25,7 +25,7 @@ mod utils;
 use api::AppState;
 use mcp::VideoTranscriberServer;
 use transcriber::TranscriberEngine;
-use video_transcriber_mcp::credits;
+use video_transcriber_mcp::{credits, x402_mcp};
 
 /// Transport mode for the MCP server
 #[derive(Debug, Clone, ValueEnum)]
@@ -179,6 +179,40 @@ async fn run_http_transport(host: &str, port: u16) -> Result<()> {
         mcp_config,
     );
 
+    // Wrap in the x402 pay-per-call router when payments are configured.
+    // Both arms become a Router so the two service types unify.
+    // rmcp responds with BoxBody; axum and the x402 layer want axum::body::Body.
+    let mcp_service = tower::Layer::layer(
+        &tower_http::map_response_body::MapResponseBodyLayer::new(axum::body::Body::new),
+        mcp_service,
+    );
+    // Built here rather than with the rest of AppState because the payment
+    // layer needs it too: a paid tool call that fails is compensated with a
+    // credit, and both paths must spend from the same ledger.
+    let credit_store = Arc::new(credits::new_store().await);
+
+    let mcp_router: axum::Router = match x402_mcp::layer_from_env() {
+        Some(layer) => {
+            // McpFailureStatus sits *under* the payment layer so it sees the
+            // real tool result. Payment settles before execution, so it can no
+            // longer un-charge a failure by withholding settlement — it grants
+            // a compensation credit instead.
+            let paid = tower::Layer::layer(
+                &layer,
+                x402_mcp::McpFailureStatus::new(
+                    mcp_service.clone(),
+                    Some(credit_store.clone()),
+                ),
+            );
+            axum::Router::new()
+                .fallback_service(x402_mcp::X402McpRouter::new(mcp_service, paid))
+        }
+        None => {
+            tracing::info!("MCP payments OFF — set X402_PAY_TO to charge for priced tools");
+            axum::Router::new().fallback_service(mcp_service)
+        }
+    };
+
     // Supabase JWKS cache for verifying user auth tokens. Falls back to a
     // placeholder URL if SUPABASE_URL isn't configured — the cache will
     // simply fail to fetch and every auth-requiring endpoint will 401,
@@ -206,7 +240,7 @@ async fn run_http_transport(host: &str, port: u16) -> Result<()> {
     let app_state = AppState {
         jobs: api::new_store(),
         engine: Arc::new(Mutex::new(TranscriberEngine::new())),
-        credits: credits::new_store().await,
+        credits: (*credit_store).clone(),
         jwks,
         pipeline_permits: Arc::new(Semaphore::new(max_concurrent)),
     };
@@ -255,7 +289,7 @@ async fn run_http_transport(host: &str, port: u16) -> Result<()> {
 
     let router = axum::Router::new()
         .nest("/api", api_router.layer(governor_layer))
-        .nest_service("/mcp", mcp_service)
+        .nest_service("/mcp", mcp_router)
         .layer(cors);
 
     let addr = format!("{}:{}", host, port);

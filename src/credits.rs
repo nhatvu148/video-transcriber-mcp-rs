@@ -85,6 +85,20 @@ pub struct FileState {
     path: PathBuf,
 }
 
+/// An empty file-backed store at `path`, for tests only.
+///
+/// Tests must never call [`new_store`]: with no `DATABASE_URL` it resolves to
+/// `./credits.json`, the real ledger, so a test that granted a credit
+/// incremented a production balance once per `cargo test` run. This is money
+/// data — it deserves a fixture, not the live file.
+#[cfg(test)]
+pub fn test_store(path: PathBuf) -> CreditStore {
+    CreditStore::File(Arc::new(Mutex::new(FileState {
+        balances: HashMap::new(),
+        path,
+    })))
+}
+
 /// Build the store. Async because the Postgres pool connects here.
 ///
 /// - `DATABASE_URL` set → connect Postgres, ensure schema, migrate any
