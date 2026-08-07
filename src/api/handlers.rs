@@ -766,10 +766,21 @@ async fn reject_internal_url(raw: &str, allowed: &str) -> Result<(), &'static st
         return Err(NOT_SUPPORTED);
     }
 
+    // `Url::host_str` returns IPv6 literals bracketed (`[::1]`), and
+    // `Ipv6Addr::from_str` rejects brackets — so passing it through unmodified
+    // sent every v6 literal down the DNS path, where it failed to resolve. That
+    // failed closed, but it meant the v6 branch of `is_internal_ip` was never
+    // reached from a real request, and legitimate public v6 literals were
+    // refused as unreachable.
+    let host_for_lookup = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+
     // Check *every* answer: a name with one public and one private record would
     // otherwise pass on the strength of the public one.
     let port = parsed.port_or_known_default().unwrap_or(443);
-    let mut resolved = tokio::net::lookup_host((host, port))
+    let mut resolved = tokio::net::lookup_host((host_for_lookup, port))
         .await
         .map_err(|_| UNREACHABLE)?
         .peekable();
@@ -875,6 +886,20 @@ pub async fn fetch_audio(
     }
 }
 
+/// Any host, but never an internal address.
+///
+/// Fast mode is advertised as supporting 1000+ platforms, so it cannot use the
+/// allowlist that protects Free mode — the entry point genuinely has to be
+/// arbitrary. That means this closes only the *direct* cases: a caller-supplied
+/// URL that resolves internally. It does **not** stop an attacker-controlled
+/// public host redirecting to an internal one, because yt-dlp follows redirects
+/// itself.
+///
+/// Closing that on this path requires egress filtering at the network layer.
+/// "Fetch arbitrary user-supplied URLs with yt-dlp" and "no SSRF" cannot both
+/// hold in application code alone.
+const ANY_HOST: &str = "*";
+
 pub async fn create_job(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -884,6 +909,14 @@ pub async fn create_job(
         Ok(id) => id,
         Err(e) => return e,
     };
+
+    // Same engine, same yt-dlp, same exposure as fetch_audio — this path just
+    // never had a check. Runs before the credit is reserved so a refused URL
+    // costs the caller nothing.
+    if let Err(msg) = reject_internal_url(&req.url, ANY_HOST).await {
+        warn!("create_job refused {}: {msg}", req.url);
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": msg })));
+    }
 
     let job_id = Uuid::new_v4();
     let now = now_unix();
@@ -1673,5 +1706,45 @@ mod ssrf_tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn ipv6_literals_reach_the_ip_check_instead_of_failing_dns() {
+        // host_str() returns these bracketed; unstripped they fell through to
+        // DNS and errored, so the v6 branch was never exercised from a real
+        // request and public v6 literals were wrongly refused.
+        for u in [
+            "http://[::1]/x",
+            "http://[::ffff:127.0.0.1]/x",
+            "http://[fe80::1]/x",
+            "http://[2002:a9fe:a9fe::1]/x",  // 6to4 wrapping 169.254.169.254
+        ] {
+            assert!(reject_internal_url(u, "*").await.is_err(), "{u} must be refused");
+        }
+        // ...and a public v6 literal is now reachable rather than "unreachable".
+        assert!(
+            reject_internal_url("http://[2001:4860:4860::8888]/v.mp4", "*")
+                .await
+                .is_ok(),
+            "a public IPv6 literal must be allowed"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_jobs_path_uses_any_host_but_still_blocks_internal() {
+        // Fast mode advertises 1000+ platforms, so it cannot use the allowlist.
+        // ANY_HOST keeps arbitrary public hosts working while still refusing
+        // addresses that resolve into our own network.
+        assert!(reject_internal_url("https://8.8.8.8/v.mp4", ANY_HOST).await.is_ok());
+        for u in [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://127.0.0.1:8080/api/jobs",
+            "http://whisgram.internal/",
+        ] {
+            assert!(
+                reject_internal_url(u, ANY_HOST).await.is_err(),
+                "{u} must be refused even on the any-host path"
+            );
+        }
     }
 }
