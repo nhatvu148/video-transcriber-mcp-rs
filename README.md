@@ -405,6 +405,32 @@ startup, so a `403` from a remote client is easy to diagnose.
 > money when remote Whisper / OpenRouter are configured. Put an
 > authenticating proxy in front of a public deployment.
 
+#### Which sites `/api/fetch-audio` will fetch
+
+`POST /api/fetch-audio` hands a caller-supplied URL to `yt-dlp`, so it is
+restricted to a list of hosts rather than accepting anything:
+
+```bash
+# Comma-separated suffixes, matched on a label boundary — so `youtube.com`
+# accepts `www.youtube.com` but not `evil-youtube.com`.
+export FETCH_AUDIO_ALLOWED_HOSTS=youtube.com,youtu.be,vimeo.com,tiktok.com,twitter.com,x.com,twitch.tv,coursera.org
+
+# On Fly:
+fly secrets set FETCH_AUDIO_ALLOWED_HOSTS=youtube.com,youtu.be
+```
+
+Unset uses that same default list. `*` allows any host.
+
+> ⚠️ `*` re-opens SSRF. The allowlist is what stops an attacker-controlled URL
+> redirecting `yt-dlp` to an internal address — IP checks alone can't, because
+> `yt-dlp` re-resolves DNS and follows redirects itself. Only use `*` alongside
+> egress filtering, or `yt-dlp --proxy` pointed at a filtering forward proxy.
+
+`POST /api/jobs` (the main transcribe path) is **not** allowlisted, because it
+is meant to accept the 1000+ sites `yt-dlp` supports. It refuses URLs that
+resolve to internal addresses, which stops the direct cases but not redirects
+or DNS rebinding. A public deployment of that endpoint wants egress filtering.
+
 [dns-rebinding]: https://en.wikipedia.org/wiki/DNS_rebinding
 
 #### Downloading (yt-dlp cookies)

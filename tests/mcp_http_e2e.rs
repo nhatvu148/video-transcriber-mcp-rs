@@ -34,43 +34,69 @@ impl HttpServer {
 
     /// Same, but with extra environment variables set on the child — used to
     /// exercise `MCP_ALLOWED_HOSTS`.
+    ///
+    /// Reserving a port and then handing it to the child leaves a window in
+    /// which another test's child binds it first. The failure that causes is
+    /// worse than a timeout: our child exits with "Address already in use",
+    /// but the port still *answers* — the other test's server is on it — so a
+    /// readiness poll that only asks "does this port respond?" succeeds, and
+    /// the test proceeds to talk to a server configured for a different test.
+    /// That surfaced as unrelated assertion failures in roughly 1 run in 5.
+    ///
+    /// So readiness is judged on our own child still being alive, and a lost
+    /// race retries with a fresh port instead of continuing against a stranger.
     async fn start_with_env(env: &[(&str, &str)]) -> Self {
-        // Ask the OS for a free port, then hand it to the child. There is a
-        // small race between releasing and rebinding, but it keeps tests
-        // independent so they can run in parallel.
-        let port = TcpListener::bind("127.0.0.1:0")
-            .expect("reserve a port")
-            .local_addr()
-            .expect("local addr")
-            .port();
+        const ATTEMPTS: usize = 5;
 
-        let child = Command::new(env!("CARGO_BIN_EXE_video-transcriber-mcp"))
-            .args(["--transport", "http", "--host", "127.0.0.1"])
-            .args(["--port", &port.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            // Force the file-backed credit store even if the developer has a
-            // real DATABASE_URL exported: these tests must never touch a
-            // production ledger.
-            .env_remove("DATABASE_URL")
-            .envs(env.iter().copied())
-            .spawn()
-            .expect("failed to spawn the MCP server binary");
+        for attempt in 1..=ATTEMPTS {
+            let port = TcpListener::bind("127.0.0.1:0")
+                .expect("reserve a port")
+                .local_addr()
+                .expect("local addr")
+                .port();
 
-        let server = Self {
-            child,
-            base: format!("http://127.0.0.1:{port}"),
-        };
-        server.wait_until_ready().await;
-        server
+            let mut child = Command::new(env!("CARGO_BIN_EXE_video-transcriber-mcp"))
+                .args(["--transport", "http", "--host", "127.0.0.1"])
+                .args(["--port", &port.to_string()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                // Force the file-backed credit store even if the developer has
+                // a real DATABASE_URL exported: these tests must never touch a
+                // production ledger.
+                .env_remove("DATABASE_URL")
+                .envs(env.iter().copied())
+                .spawn()
+                .expect("failed to spawn the MCP server binary");
+
+            let base = format!("http://127.0.0.1:{port}");
+            if Self::await_ready(&mut child, &base).await {
+                return Self { child, base };
+            }
+
+            let _ = child.kill();
+            let _ = child.wait();
+            assert!(
+                attempt < ATTEMPTS,
+                "server never became ready in {ATTEMPTS} attempts (port contention?)"
+            );
+        }
+        unreachable!("loop either returns or asserts on the last attempt")
     }
 
-    /// Poll until the MCP endpoint answers, so tests never race startup.
-    async fn wait_until_ready(&self) {
+    /// True once *our* child is serving. Returns false if it exited — which is
+    /// what losing the port race looks like — so the caller can retry rather
+    /// than bind onto whatever else happens to be listening.
+    async fn await_ready(child: &mut Child, base: &str) -> bool {
         let client = reqwest::Client::new();
         for _ in 0..100 {
+            // Checked first: if the child is gone, a responding port is
+            // somebody else's server, and treating that as ready is exactly
+            // the bug this guards against.
+            if let Ok(Some(_status)) = child.try_wait() {
+                return false;
+            }
             let responded = client
-                .post(format!("{}/mcp", self.base))
+                .post(format!("{base}/mcp"))
                 .header("content-type", "application/json")
                 .header("accept", ACCEPT)
                 .body("{}")
@@ -79,11 +105,11 @@ impl HttpServer {
                 .await
                 .is_ok();
             if responded {
-                return;
+                return true;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        panic!("server did not become ready within 10s");
+        false
     }
 
     /// Initialize a session and return `(session_id, initialize_result)`.
