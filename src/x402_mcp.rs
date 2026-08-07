@@ -218,9 +218,11 @@ pub fn payment_settings() -> Option<PaymentSettings> {
 /// Builds the x402 layer from the environment, or `None` when payment is off.
 ///
 /// Disabled unless `X402_PAY_TO` is set, so existing deployments are
-/// unaffected until an operator opts in. Testnet is the default: reaching real
-/// money takes an explicit `X402_NETWORK=base`, so a misconfiguration fails
-/// toward play money rather than toward charging someone.
+/// unaffected until an operator opts in. Devnet is the default: reaching real
+/// money takes an explicit `X402_NETWORK=solana` (or `mainnet`), so a
+/// misconfiguration fails toward play money rather than toward charging
+/// someone. The value `base` predates the move off EVM and is not recognised —
+/// it would silently leave the deployment on devnet.
 pub fn layer_from_env() -> Option<PaidLayer> {
     let settings = payment_settings()?;
     let usdc = if settings.mainnet { USDC::solana() } else { USDC::solana_devnet() };
@@ -487,14 +489,22 @@ where
         Box::pin(async move {
             let response = inner.call(request).await?;
             if !response.status().is_success() {
-                return Ok(response); // already a failure; nothing to signal
+                // Transport-level failure — a 500 from the MCP service, a
+                // timeout, a panic mapped to 5xx. Under settle-after this
+                // returned early because the non-2xx status was itself what
+                // made x402 withhold settlement, so no action was needed.
+                // Settling first removed that lever: the payer has already
+                // been charged, and undelivered work is undelivered whether
+                // the failure was reported in-band or by status code.
+                compensate(credits.as_deref(), payer.as_deref()).await;
+                return Ok(response);
             }
 
             // A response too big to inspect must still reach the caller:
             // discarding a completed transcript to protect a billing decision
-            // is a far worse trade than occasionally settling one we couldn't
-            // check. Where Content-Length tells us up front that it won't fit,
-            // pass it through untouched and let it settle.
+            // is a far worse trade than occasionally mis-billing one we
+            // couldn't check. This branch is a 2xx carrying a large body —
+            // work that succeeded — so the charge stands and nothing is owed.
             let too_large = response
                 .headers()
                 .get(axum::http::header::CONTENT_LENGTH)
@@ -503,7 +513,7 @@ where
                 .is_some_and(|len| len > MAX_INSPECTABLE_RESPONSE);
             if too_large {
                 tracing::warn!(
-                    "x402: response too large to inspect; delivering it and allowing settlement"
+                    "x402: response too large to inspect; delivering it and letting the charge stand"
                 );
                 return Ok(response);
             }
@@ -517,10 +527,12 @@ where
                 // Only reachable for a chunked response with no
                 // Content-Length that outgrows the cap mid-stream. The body
                 // is already consumed and unrecoverable, so this is the one
-                // case where content is genuinely lost — report it as a
-                // failure so settlement is skipped and the caller isn't
-                // charged for something they didn't receive.
+                // case where content is genuinely lost. Under settle-after,
+                // reporting 502 was enough to stop the charge; settling first
+                // means the payer has paid for something they will never
+                // receive, so the debt must be recorded explicitly.
                 Err(_) => {
+                    compensate(credits.as_deref(), payer.as_deref()).await;
                     parts.status = axum::http::StatusCode::BAD_GATEWAY;
                     parts.headers.remove(axum::http::header::CONTENT_LENGTH);
                     return Ok(axum::response::Response::from_parts(
@@ -1226,6 +1238,72 @@ mod real_failure_tests {
     fn a_settlement_without_a_payer_field_yields_none() {
         let settled = x402_types::proto::SettleResponse(serde_json::json!({"success": true}));
         assert!(payer_from_extensions(&request_with(Some(Some(settled)))).is_none());
+    }
+
+    /// Inner service that always answers with a fixed status.
+    #[derive(Clone)]
+    struct FixedResponse(axum::http::StatusCode);
+
+    impl Service<Request<Body>> for FixedResponse {
+        type Response = axum::response::Response;
+        type Error = std::convert::Infallible;
+        type Future = std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>,
+        >;
+        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, _: Request<Body>) -> Self::Future {
+            let status = self.0;
+            Box::pin(async move {
+                Ok(axum::response::Response::builder()
+                    .status(status)
+                    .body(Body::from(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#))
+                    .unwrap())
+            })
+        }
+    }
+
+    async fn balance_after(status: axum::http::StatusCode, payer: &str) -> (i32, i32) {
+        let dir = std::env::temp_dir().join(format!("x402-exit-{}", status.as_u16()));
+        let _ = std::fs::create_dir_all(&dir);
+        let store = Arc::new(crate::credits::test_store(dir.join("credits.json")));
+        let key = wallet_key(payer);
+        let before = crate::credits::balance(&store, &key).await;
+
+        let mut svc = McpFailureStatus::new(FixedResponse(status), Some(store.clone()));
+        let mut req = Request::new(Body::empty());
+        req.extensions_mut()
+            .insert(Some(x402_types::proto::SettleResponse(serde_json::json!({
+                "success": true, "payer": payer,
+            }))));
+        let _ = svc.call(req).await.expect("service call");
+
+        (before, crate::credits::balance(&store, &key).await)
+    }
+
+    #[tokio::test]
+    async fn a_transport_level_failure_after_payment_is_compensated() {
+        // Settle-before means a 5xx from the MCP service is undelivered paid
+        // work exactly like an in-band tool error. This exit returned early
+        // under settle-after, when the status itself withheld settlement.
+        let (before, after) =
+            balance_after(axum::http::StatusCode::INTERNAL_SERVER_ERROR, "PayerFor500").await;
+        assert_eq!(after, before + 1, "a 5xx after payment must record the debt");
+    }
+
+    #[tokio::test]
+    async fn a_client_error_after_payment_is_also_compensated() {
+        let (before, after) =
+            balance_after(axum::http::StatusCode::BAD_REQUEST, "PayerFor400").await;
+        assert_eq!(after, before + 1, "any non-2xx after payment owes the caller");
+    }
+
+    #[tokio::test]
+    async fn a_successful_call_owes_nothing() {
+        // The control: work delivered, charge stands, no credit.
+        let (before, after) = balance_after(axum::http::StatusCode::OK, "PayerForOk").await;
+        assert_eq!(after, before, "a delivered result must not be compensated");
     }
 
     #[tokio::test]
