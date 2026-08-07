@@ -453,7 +453,7 @@ src/
 ├── lib.rs            # public API for embedders
 ├── mcp/              # MCP server: tool definitions and handlers
 ├── transcriber/      # the pipeline: yt-dlp → ffmpeg → whisper.cpp
-├── embeddings/       # passage embeddings, used by `search_transcripts`
+├── embeddings.rs     # passage embeddings, used by `search_transcripts`
 └── utils/            # paths
 ```
 
