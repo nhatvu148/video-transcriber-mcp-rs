@@ -89,18 +89,28 @@ SID=$(curl -s -D - -o /dev/null -X POST "http://127.0.0.1:$PORT/mcp" \
 head_ "URL guard is ON over HTTP (reachable by others)"
 
 for target in "http://127.0.0.1:8080/x.mp4" "http://169.254.169.254/latest/meta-data/"; do
+  # Host as submitted, so the leak check below is about *this* target rather
+  # than a hardcoded pattern that happens to match one of them.
+  host=$(sed -E 's|^https?://||; s|[:/].*$||' <<<"$target")
+
   RESP=$(curl -s -X POST "http://127.0.0.1:$PORT/mcp" \
     -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' \
     -H "mcp-session-id: $SID" \
     -d "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"transcribe_video\",\"arguments\":{\"url\":\"$target\"}}}")
+
   grep -q 'not reachable' <<<"$RESP" \
     && ok "refuses $target" || bad "did NOT refuse $target"
-done
 
-# A refusal must not describe the network back to the caller.
-grep -qE '169\.254|private|loopback' <<<"$RESP" \
-  && bad "refusal leaks network detail" || ok "refusal reveals nothing about the network"
+  # Checked per target, not once after the loop: a refusal must not echo the
+  # address back or name why it was refused, or it becomes a probe of what is
+  # reachable from in here.
+  if grep -qE "$host|private|loopback|link-local" <<<"$RESP"; then
+    bad "refusal for $host leaks network detail"
+  else
+    ok "refusal for $host reveals nothing"
+  fi
+done
 
 kill $SRV 2>/dev/null
 
