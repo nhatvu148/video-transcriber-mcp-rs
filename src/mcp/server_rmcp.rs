@@ -15,6 +15,15 @@ use crate::utils::paths::get_default_output_dir;
 #[derive(Clone)]
 pub struct VideoTranscriberServer {
     transcriber: Arc<Mutex<TranscriberEngine>>,
+    /// Refuse `transcribe_video` URLs that resolve into our own network.
+    ///
+    /// Off by default because the default transport is stdio, where there is no
+    /// attacker: the caller already has a shell, and transcribing
+    /// `http://localhost:8000/lecture.mp4` from your own machine is a normal
+    /// thing to do. A remotely-reachable deployment turns it on — see
+    /// [`VideoTranscriberServer::with_url_guard`].
+    guard_urls: bool,
+
     /// Appended to `transcribe_video`'s description, verbatim.
     ///
     /// A deployment that charges for this tool has to say so in the catalogue,
@@ -35,8 +44,19 @@ impl VideoTranscriberServer {
     pub fn new() -> Self {
         Self {
             transcriber: Arc::new(Mutex::new(TranscriberEngine::new())),
+            guard_urls: false,
             tool_note: None,
         }
+    }
+
+    /// Refuse URLs that resolve to loopback, private or link-local addresses.
+    ///
+    /// For deployments others can reach — anything serving `--transport http`.
+    /// Not the default: on stdio the caller owns the machine, so blocking
+    /// localhost would remove a legitimate use and prevent no attack.
+    pub fn with_url_guard(mut self) -> Self {
+        self.guard_urls = true;
+        self
     }
 
     /// Append `note` to the `transcribe_video` description.
@@ -307,6 +327,23 @@ impl VideoTranscriberServer {
                         )
                     })?
                     .to_string();
+
+                // Remote deployments only. `ANY_HOST` because this tool
+                // advertises 1000+ platforms, so its entry point genuinely
+                // cannot be enumerated — this closes the direct cases, not
+                // redirects. See `url_guard` for what that leaves open.
+                if self.guard_urls
+                    && let Err(msg) =
+                        crate::url_guard::reject_internal_url(&url, crate::url_guard::ANY_HOST)
+                            .await
+                {
+                    tracing::warn!("transcribe_video refused {url}: {msg}");
+                    return Err(ErrorData::new(
+                        ErrorCode::INVALID_PARAMS,
+                        msg.to_string(),
+                        None,
+                    ));
+                }
 
                 let output_dir = args
                     .get("output_dir")

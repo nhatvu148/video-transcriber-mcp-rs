@@ -40,6 +40,7 @@ tokio = { version = "1.53", features = ["full"] }
 tower-http = { version = "0.7", features = ["cors"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2.5"
 
 # Metal GPU acceleration on macOS (Apple Silicon). On other platforms we fall
 # back to plain CPU — change features there if you have CUDA / OpenBLAS / etc.

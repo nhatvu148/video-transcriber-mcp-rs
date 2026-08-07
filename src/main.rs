@@ -122,7 +122,8 @@ async fn run_http_transport(host: &str, port: u16) -> Result<()> {
     }
 
     let mcp_service = StreamableHttpService::new(
-        || Ok(VideoTranscriberServer::new()),
+        // Reachable by others, unlike the stdio transport.
+        || Ok(VideoTranscriberServer::new().with_url_guard()),
         LocalSessionManager::default().into(),
         mcp_config,
     );

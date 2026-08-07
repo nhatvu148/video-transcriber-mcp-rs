@@ -11,6 +11,7 @@
 pub mod embeddings;
 pub mod mcp;
 pub mod transcriber;
+pub mod url_guard;
 pub mod utils;
 
 pub use transcriber::types::Segment;
