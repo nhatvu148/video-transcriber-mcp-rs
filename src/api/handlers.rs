@@ -779,11 +779,22 @@ async fn reject_internal_url(raw: &str, allowed: &str) -> Result<(), &'static st
 
     // Check *every* answer: a name with one public and one private record would
     // otherwise pass on the strength of the public one.
+    //
+    // Bounded, because `lookup_host` otherwise waits out the OS resolver's full
+    // retry window — a hostname delegated to a blackholed nameserver would pin
+    // a request handler for that long, for free, from any account.
+    const DNS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
     let port = parsed.port_or_known_default().unwrap_or(443);
-    let mut resolved = tokio::net::lookup_host((host_for_lookup, port))
-        .await
-        .map_err(|_| UNREACHABLE)?
-        .peekable();
+    let mut resolved = tokio::time::timeout(
+        DNS_TIMEOUT,
+        tokio::net::lookup_host((host_for_lookup, port)),
+    )
+    .await
+    // Timed out, and separately: resolution failed. Both mean we could not
+    // establish the address is safe, and both must refuse rather than proceed.
+    .map_err(|_| UNREACHABLE)?
+    .map_err(|_| UNREACHABLE)?
+    .peekable();
     if resolved.peek().is_none() {
         return Err(UNREACHABLE);
     }
