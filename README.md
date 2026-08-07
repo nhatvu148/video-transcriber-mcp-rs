@@ -413,7 +413,7 @@ restricted to a list of hosts rather than accepting anything:
 ```bash
 # Comma-separated suffixes, matched on a label boundary — so `youtube.com`
 # accepts `www.youtube.com` but not `evil-youtube.com`.
-export FETCH_AUDIO_ALLOWED_HOSTS=youtube.com,youtu.be,vimeo.com,dailymotion.com
+export FETCH_AUDIO_ALLOWED_HOSTS=youtube.com,youtu.be,vimeo.com,tiktok.com,twitter.com,x.com,twitch.tv,coursera.org
 
 # On Fly:
 fly secrets set FETCH_AUDIO_ALLOWED_HOSTS=youtube.com,youtu.be

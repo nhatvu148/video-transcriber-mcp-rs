@@ -710,7 +710,18 @@ fn is_internal_ip(ip: std::net::IpAddr) -> bool {
 /// platforms Free mode serves. Set it to `*` to allow any host, which restores
 /// the redirect exposure and should only be paired with egress filtering at the
 /// network layer.
-const DEFAULT_ALLOWED_HOSTS: &str = "youtube.com,youtu.be,vimeo.com,dailymotion.com";
+/// Defaults to the platforms the product names in its own UI — the hint under
+/// the URL input reads "YouTube, Vimeo, TikTok, Twitter, Twitch, Coursera, and
+/// 1000+ more" (`web/index.html`, `extension/sidepanel.html`), and it sits
+/// above the mode picker, so a Free-mode user reads it as applying to them.
+///
+/// The list therefore covers every platform named there. It cannot cover
+/// "1000+ more" — that is the trade this allowlist makes, and it is why an
+/// unlisted host is refused with "use Fast mode" rather than a generic error.
+/// If Free mode should genuinely accept anything, that is `*` plus the egress
+/// filtering tracked in the follow-up issue, not a longer list.
+const DEFAULT_ALLOWED_HOSTS: &str =
+    "youtube.com,youtu.be,vimeo.com,tiktok.com,twitter.com,x.com,twitch.tv,coursera.org";
 
 fn allowed_hosts_config() -> String {
     std::env::var("FETCH_AUDIO_ALLOWED_HOSTS")
@@ -1698,7 +1709,13 @@ mod ssrf_tests {
     #[test]
     fn allowlist_matches_on_a_label_boundary() {
         let cfg = DEFAULT_ALLOWED_HOSTS;
-        for good in ["youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"] {
+        for good in [
+            "youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be",
+            // Every platform the UI names must work, or Free mode refuses
+            // something the page told the user it supports.
+            "vimeo.com", "www.tiktok.com", "twitter.com", "x.com",
+            "www.twitch.tv", "www.coursera.org",
+        ] {
             assert!(host_is_allowed_by(good, cfg), "{good} should be allowed");
         }
         // Naive suffix matching lets every one of these through.
