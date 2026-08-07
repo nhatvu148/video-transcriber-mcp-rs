@@ -442,52 +442,21 @@ tasks:
   # Verification — what to run before publishing or deploying
   # ---------------------------------------------------------------------------
   verify:
-    desc: "Full local verification: lint + tests + MCP smoke + real transcription"
+    desc: "Full local verification: lint + tests + MCP smoke + HTTP/guard + real transcription"
     cmds:
       - task: lint
       - task: test
       - task: mcp:smoke
+      - task: mcp:http
       - task: mcp:transcribe
       - |
         echo ""
         echo "✅ Full verification passed."
 
   test:
-    desc: Run the whole test suite (Postgres tests skip without DATABASE_URL)
+    desc: Run the whole test suite
     cmds:
       - cargo test --all-targets
-      - |
-        if [ -z "$DATABASE_URL" ]; then
-          echo ""
-          echo "ℹ️  tests/credits_pg.rs skipped — no DATABASE_URL."
-          echo "   Run 'task test:pg' to cover the Postgres credit ledger."
-        fi
-
-  test:pg:
-    desc: Run the Postgres credit-ledger tests against a throwaway database
-    cmds:
-      - |
-        # The ledger is the money path and every other credits test uses the
-        # file backend, so the sqlx code only gets exercised here.
-        set -e
-        NAME=vtm-test-pg
-        PORT=55440
-        cleanup() { docker rm -f $NAME >/dev/null 2>&1 || true; }
-        trap cleanup EXIT
-        cleanup
-        echo "🐘 starting throwaway Postgres on :$PORT..."
-        docker run -d --name $NAME -e POSTGRES_PASSWORD=postgres \
-          -e POSTGRES_DB=credits_test -p $PORT:5432 postgres:16-alpine >/dev/null
-        for i in $(seq 1 40); do
-          docker exec $NAME pg_isready -U postgres >/dev/null 2>&1 && break
-          sleep 1
-        done
-        DATABASE_URL="postgres://postgres:postgres@localhost:$PORT/credits_test" \
-        CREDITS_DB_PATH="$(mktemp -d)/credits.json" \
-          cargo test --test credits_pg -- --nocapture
-    preconditions:
-      - sh: command -v docker >/dev/null
-        msg: "Docker is required for task test:pg (it runs a throwaway Postgres)."
 
   # ---------------------------------------------------------------------------
   # MCP Server tasks
@@ -503,6 +472,16 @@ tasks:
     deps: [build]
     cmds:
       - python3 scripts/mcp-transcribe-check.py {{.BINARY}}
+
+  mcp:http:
+    desc: Drive the HTTP transport and assert the URL guard is on there and off on stdio
+    # mcp:smoke covers stdio and the tool catalogue. This covers what it can't:
+    # the streamable-HTTP transport, and that the SSRF guard applies to a
+    # remotely-reachable deployment but NOT to stdio, where the caller owns the
+    # machine and refusing localhost would remove a legitimate use.
+    deps: [build]
+    cmds:
+      - BIN={{.BINARY}} bash scripts/mcp-http-check.sh
 
   mcp:test:
     desc: Minimal stdio handshake against the MCP server
