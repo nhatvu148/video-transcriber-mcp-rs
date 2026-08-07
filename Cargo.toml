@@ -104,6 +104,7 @@ whisper-rs = {version = "0.16", features = ["metal"]}
 whisper-rs = "0.16"
 
 [dev-dependencies]
+base64 = "0.23"
 criterion = "0.8"
 # Integration tests in `tests/` can't see the crate's regular dependencies, so
 # the HTTP-transport e2e suite needs its own client + runtime. Same versions

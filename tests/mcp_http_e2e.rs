@@ -490,9 +490,30 @@ async fn priced_tool_is_challenged_with_402_when_unpaid() {
     );
 
     // The challenge has to tell the client what to pay, or it can't retry.
-    let body = response.text().await.expect("402 body");
-    let challenge: Value = serde_json::from_str(&body)
-        .unwrap_or_else(|e| panic!("402 body must be JSON ({e}): {body}"));
+    //
+    // Under v2 it travels in the `Payment-Required` header as base64 JSON and
+    // the body is empty — v1 put it in the body. Reading the body here is what
+    // this test used to do, and it silently became a test of nothing when the
+    // server moved to v2: `response.text()` returns "", which is not JSON, so
+    // the failure at least stayed loud.
+    use base64::Engine as _;
+    let raw = response
+        .headers()
+        .get("payment-required")
+        .unwrap_or_else(|| panic!("402 must carry a Payment-Required header"))
+        .to_str()
+        .expect("Payment-Required must be ASCII");
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(raw)
+        .unwrap_or_else(|e| panic!("Payment-Required must be base64 ({e}): {raw}"));
+    let challenge: Value = serde_json::from_slice(&decoded)
+        .unwrap_or_else(|e| panic!("Payment-Required must decode to JSON ({e})"));
+
+    assert_eq!(
+        challenge["x402Version"], 2,
+        "server, client and facilitator must agree on the protocol version"
+    );
+
     let accepts = challenge["accepts"]
         .as_array()
         .unwrap_or_else(|| panic!("402 must carry an `accepts` array: {challenge}"));
@@ -503,15 +524,24 @@ async fn priced_tool_is_challenged_with_402_when_unpaid() {
         "the challenge must name our receiving address"
     );
     // A challenge without an amount can't be acted on, which is as useless as
-    // a 400. v1 carries it as `maxAmountRequired`, in the asset's base units —
-    // 200000 at USDC's 6 decimals is $0.20.
-    let amount = accepts[0]["maxAmountRequired"]
+    // a 400. v2 calls it `amount` (v1: `maxAmountRequired`), in the asset's
+    // base units — 200000 at USDC's 6 decimals is $0.20.
+    let amount = accepts[0]["amount"]
         .as_str()
         .unwrap_or_else(|| panic!("challenge must state an amount: {}", accepts[0]));
     assert_eq!(amount, "200000", "expected $0.20 in USDC base units");
     assert!(
         accepts[0]["asset"].as_str().is_some_and(|a| !a.is_empty()),
         "the challenge must name the asset to pay in"
+    );
+    // v2 identifies the network by CAIP-2 chain id, not v1's "solana-devnet".
+    // A client that can't parse this can't select a payment scheme.
+    assert!(
+        accepts[0]["network"]
+            .as_str()
+            .is_some_and(|n| n.starts_with("solana:")),
+        "expected a CAIP-2 solana network, got {}",
+        accepts[0]["network"]
     );
 }
 
