@@ -5,6 +5,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-08-08
+
+### Changed
+
+- **BREAKING: the crate is now only the MCP server and transcription
+  pipeline.** The public modules `api`, `auth`, `credits`, `llm` and
+  `x402_mcp` are gone — roughly 5,600 lines of REST API, Supabase auth, credit
+  ledger, Stripe and x402 payments that had accumulated here. They were a
+  product built on this crate, not part of it, and now live in a separate
+  private crate that depends on this one as a library.
+
+  Library consumers importing those modules must move to the new crate. The
+  binary, the MCP tool surface and the transcription behaviour are unchanged —
+  all nine tools work exactly as before.
+
+  **Dependencies drop from 544 to 274.** `cargo install video-transcriber-mcp`
+  no longer builds Solana, Stripe, sqlx/Postgres or JWT support to get a
+  transcription server.
+
+- `search_transcripts`' chunking and embedding moved to a new `embeddings`
+  module. It is MCP surface — it searches transcripts this server produced —
+  so it stayed while the rest of the AI layer left.
+
+- `transcribe_video`'s description is no longer built by the payment layer. A
+  deployment that charges for the tool supplies its own note via
+  `VideoTranscriberServer::with_tool_note`, so the open-source build quotes no
+  price.
+
+### Added
+
+- **`url_guard`: caller-supplied URLs are checked before reaching yt-dlp.**
+  Refuses loopback, RFC1918, link-local (cloud metadata), carrier-grade NAT and
+  the IPv6 equivalents — including v4-mapped, 6to4, Teredo, NAT64 and
+  IPv4-compatible forms, each of which can smuggle an internal v4 target past a
+  naive check. DNS resolution is bounded at 5s.
+
+  Applied by `--transport http` via `VideoTranscriberServer::with_url_guard`,
+  and deliberately **not** on stdio: there the caller already owns the machine,
+  so refusing `http://localhost:8000/clip.mp4` would remove a legitimate use and
+  prevent no attack.
+
+  It does not stop redirects or DNS rebinding — yt-dlp resolves and follows
+  those itself. See the module docs for why pinning the resolved IP is neither
+  available in yt-dlp nor sufficient, and what does close it.
+
+- `task mcp:http` drives the HTTP transport and asserts the guard is on there
+  and off on stdio. Wired into `task verify`.
+
+### Removed
+
+- No ARM64 Linux release binary. whisper.cpp's NEON path does not compile for
+  that target (#13); the job previously ran with `continue-on-error`, so
+  releases either lacked the artifact or shipped an unverified one. `install.sh`
+  now says so and points at `cargo install`.
+
 ## [0.9.0] - 2026-08-06
 
 ### Changed
