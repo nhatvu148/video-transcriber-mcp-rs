@@ -2,8 +2,11 @@ name: CI
 
 # release.yml only fires on `v*` tags, so before this workflow existed nothing
 # validated a pull request. Everything here runs without secrets or paid
-# services: the MCP suites drive the real binary over stdio and HTTP, and the
-# credit-ledger suite runs against a throwaway Postgres service container.
+# services: the MCP suites drive the real binary over stdio and HTTP.
+#
+# The Postgres service and the credit-ledger assertion that used to live here
+# went with the code — the ledger, auth and payments moved to a private crate
+# and this repo has no database access left to test.
 on:
   pull_request:
   push:
@@ -21,31 +24,8 @@ env:
 
 jobs:
   test:
-    name: Test (linux + postgres)
+    name: Test (linux)
     runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: credits_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-    env:
-      # Switches tests/credits_pg.rs from "skip" to "run" — this is what keeps
-      # the sqlx call sites (the money path) covered.
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/credits_test
-      # Keep the file-backed fallback out of the checkout so no test can write
-      # a credits.json into the working tree. (Literal path rather than
-      # `runner.temp`: the `runner` context isn't available in job-level env.)
-      CREDITS_DB_PATH: /tmp/credits-ci.json
 
     steps:
       - uses: actions/checkout@v4
@@ -66,17 +46,6 @@ jobs:
       - name: Test
         run: cargo test --all-targets
 
-      - name: Confirm the Postgres suite actually ran
-        # These tests skip silently when DATABASE_URL is unset. A broken
-        # service container would therefore look like a green build, so assert
-        # the ledger tests really executed against Postgres.
-        run: |
-          output=$(cargo test --test credits_pg -- --nocapture 2>&1)
-          echo "$output"
-          if echo "$output" | grep -q "skipping: DATABASE_URL not set"; then
-            echo "::error::credit ledger tests skipped — the Postgres service is not reachable"
-            exit 1
-          fi
 
   check:
     # Linux is covered by the `test` job. This catches platform-specific
