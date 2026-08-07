@@ -671,6 +671,20 @@ fn is_internal_ip(ip: std::net::IpAddr) -> bool {
                         let b = !seg[7];
                         std::net::Ipv4Addr::new((a >> 8) as u8, a as u8, (b >> 8) as u8, b as u8)
                     })
+                })
+                // NAT64 well-known prefix 64:ff9b::/96 — v4 in the low 32 bits,
+                // so `64:ff9b::a9fe:a9fe` is 169.254.169.254 anywhere a NAT64
+                // gateway is present. A documented way past filters that stop
+                // at the more familiar embeddings above.
+                .or_else(|| {
+                    (seg[0] == 0x0064 && seg[1] == 0xff9b && seg[2..6] == [0, 0, 0, 0]).then(|| {
+                        std::net::Ipv4Addr::new(
+                            (seg[6] >> 8) as u8,
+                            seg[6] as u8,
+                            (seg[7] >> 8) as u8,
+                            seg[7] as u8,
+                        )
+                    })
                 });
 
             v6.is_loopback()
@@ -794,6 +808,15 @@ async fn reject_internal_url(raw: &str, allowed: &str) -> Result<(), &'static st
     // Bounded, because `lookup_host` otherwise waits out the OS resolver's full
     // retry window — a hostname delegated to a blackholed nameserver would pin
     // a request handler for that long, for free, from any account.
+    //
+    // Partial by construction: `lookup_host` runs `getaddrinfo` on tokio's
+    // blocking pool, and cancelling the future does not cancel that thread. So
+    // this frees the *handler* at 5s while the blocking task runs on. Enough
+    // concurrent blackholed lookups could still saturate the blocking pool.
+    // Not closed here because the `/api/*` governor already bounds request rate
+    // per IP (see `main.rs`), and closing it properly means replacing
+    // `getaddrinfo` with a cancellable resolver such as `hickory-resolver` —
+    // a dependency worth adding only if this stops being theoretical.
     const DNS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
     let port = parsed.port_or_known_default().unwrap_or(443);
     let mut resolved = tokio::time::timeout(
@@ -1629,6 +1652,9 @@ mod ssrf_tests {
             // ::ffff:127.0.0.1 is the classic bypass of a v4-only check.
             "::ffff:127.0.0.1",
             "::ffff:169.254.169.254",
+            // NAT64 well-known prefix — 169.254.169.254 reached via a gateway.
+            "64:ff9b::a9fe:a9fe",
+            "64:ff9b::7f00:1",
         ] {
             assert!(is_internal_ip(ip(s)), "{s} must be treated as internal");
         }
