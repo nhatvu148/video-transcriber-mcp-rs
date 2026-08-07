@@ -672,6 +672,21 @@ fn is_internal_ip(ip: std::net::IpAddr) -> bool {
                         std::net::Ipv4Addr::new((a >> 8) as u8, a as u8, (b >> 8) as u8, b as u8)
                     })
                 })
+                // IPv4-compatible `::a.b.c.d` (deprecated, and missed by
+                // to_ipv4_mapped). Modern stacks do not auto-route these, so
+                // this is completeness rather than a live hole — but leaving
+                // one member of the family out invites someone to assume the
+                // others are missing too.
+                .or_else(|| {
+                    (seg[0..6] == [0, 0, 0, 0, 0, 0] && (seg[6] != 0 || seg[7] > 1)).then(|| {
+                        std::net::Ipv4Addr::new(
+                            (seg[6] >> 8) as u8,
+                            seg[6] as u8,
+                            (seg[7] >> 8) as u8,
+                            seg[7] as u8,
+                        )
+                    })
+                })
                 // NAT64 well-known prefix 64:ff9b::/96 — v4 in the low 32 bits,
                 // so `64:ff9b::a9fe:a9fe` is 169.254.169.254 anywhere a NAT64
                 // gateway is present. A documented way past filters that stop
@@ -1655,6 +1670,9 @@ mod ssrf_tests {
             // NAT64 well-known prefix — 169.254.169.254 reached via a gateway.
             "64:ff9b::a9fe:a9fe",
             "64:ff9b::7f00:1",
+            // IPv4-compatible ::a.b.c.d — the deprecated form.
+            "::7f00:1",      // 127.0.0.1
+            "::a9fe:a9fe",   // 169.254.169.254
         ] {
             assert!(is_internal_ip(ip(s)), "{s} must be treated as internal");
         }
