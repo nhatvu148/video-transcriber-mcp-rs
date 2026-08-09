@@ -70,7 +70,14 @@ impl VideoTranscriberServer {
 }
 
 
-/// Largest transcript returned inline, in characters.
+/// Largest transcript returned inline, in **bytes**.
+///
+/// Bytes rather than characters because what needs bounding is the response
+/// size, and `str::len()` is bytes. The distinction is not pedantic here: these
+/// transcripts are routinely Vietnamese or Japanese, where a character costs
+/// three bytes, so 200k bytes is only ~65k characters. Reporting one as the
+/// other would be wrong by 3x on exactly the content this is most likely to
+/// truncate.
 ///
 /// A three-hour lecture runs to a few hundred KB, which is a lot to push
 /// through a single tool result and into a model's context. Past this the text
@@ -91,11 +98,13 @@ fn truncate_transcript(transcript: &str) -> String {
         .find(|&i| transcript.is_char_boundary(i))
         .unwrap_or(0);
     format!(
-        "{}\n\n[truncated at {} of {} characters — the full text is in the \
-         .txt file listed above]",
+        "{}\n\n[truncated: {} of {} bytes shown ({} of {} characters) — the \
+         full text is in the .txt file listed above]",
         &transcript[..cut],
         cut,
-        transcript.len()
+        transcript.len(),
+        transcript[..cut].chars().count(),
+        transcript.chars().count(),
     )
 }
 
@@ -1169,7 +1178,8 @@ mod tests {
         let t = "x".repeat(MAX_INLINE_TRANSCRIPT + 5_000);
         let out = truncate_transcript(&t);
         assert!(out.len() < t.len());
-        assert!(out.contains("truncated at"), "must not clip silently");
+        assert!(out.contains("truncated:"), "must not clip silently");
+        assert!(out.contains("bytes shown"), "must say bytes, since len() is bytes");
         assert!(out.contains(".txt file"), "must say where the rest is");
     }
 
@@ -1180,7 +1190,15 @@ mod tests {
         for filler in ["ế", "日", "🪙"] {
             let t = filler.repeat(MAX_INLINE_TRANSCRIPT);
             let out = truncate_transcript(&t); // panics if the cut is wrong
-            assert!(out.contains("truncated at"), "{filler} case should truncate");
+            assert!(out.contains("truncated:"), "{filler} case should truncate");
+            // The byte and character counts must differ for multi-byte input,
+            // which is the whole reason the message reports both.
+            let chars = t.chars().count();
+            assert!(t.len() > chars, "{filler} should be multi-byte");
+            assert!(
+                out.contains(&format!("of {} characters", chars)),
+                "{filler}: character total should be chars, not bytes"
+            );
         }
     }
 }
