@@ -70,6 +70,44 @@ impl VideoTranscriberServer {
 }
 
 
+/// Largest transcript returned inline, in **bytes**.
+///
+/// Bytes rather than characters because what needs bounding is the response
+/// size, and `str::len()` is bytes. The distinction is not pedantic here: these
+/// transcripts are routinely Vietnamese or Japanese, where a character costs
+/// three bytes, so 200k bytes is only ~65k characters. Reporting one as the
+/// other would be wrong by 3x on exactly the content this is most likely to
+/// truncate.
+///
+/// A three-hour lecture runs to a few hundred KB, which is a lot to push
+/// through a single tool result and into a model's context. Past this the text
+/// is cut at a character boundary and says so, rather than being silently
+/// clipped — a caller who reads "transcript" and gets 60% of one has no way to
+/// tell.
+const MAX_INLINE_TRANSCRIPT: usize = 200_000;
+
+/// The transcript, cut to [`MAX_INLINE_TRANSCRIPT`] if it is enormous.
+fn truncate_transcript(transcript: &str) -> String {
+    if transcript.len() <= MAX_INLINE_TRANSCRIPT {
+        return transcript.to_string();
+    }
+    // Cut on a char boundary — slicing mid-UTF-8 panics, and transcripts are
+    // routinely non-ASCII.
+    let cut = (0..=MAX_INLINE_TRANSCRIPT.min(transcript.len()))
+        .rev()
+        .find(|&i| transcript.is_char_boundary(i))
+        .unwrap_or(0);
+    format!(
+        "{}\n\n[truncated: {} of {} bytes shown ({} of {} characters) — the \
+         full text is in the .txt file listed above]",
+        &transcript[..cut],
+        cut,
+        transcript.len(),
+        transcript[..cut].chars().count(),
+        transcript.chars().count(),
+    )
+}
+
 /// Base description for `transcribe_video`. Deployment-specific additions
 /// (e.g. a price) come from [`VideoTranscriberServer::with_tool_note`].
 const TRANSCRIBE_VIDEO_DESCRIPTION: &str = "Transcribe videos from 1000+ platforms (YouTube, Vimeo, TikTok, Twitter, etc.) or local video files using whisper.cpp (4-10x faster than Python whisper!). Downloads/extracts audio and generates transcript in TXT, JSON, and Markdown formats.";
@@ -374,6 +412,20 @@ impl VideoTranscriberServer {
                 let transcriber = self.transcriber.lock().await;
                 match transcriber.transcribe(options).await {
                     Ok(result) => {
+                        // The transcript goes in the response, not just a
+                        // preview and three paths.
+                        //
+                        // Paths are the right answer for the stdio transport,
+                        // where the files land on the caller's own machine. Over
+                        // HTTP they are actively misleading: they point into the
+                        // server's container, which the caller cannot read, and
+                        // on an ephemeral filesystem they may not survive the
+                        // next restart. A caller who paid for a transcription
+                        // should get the transcription.
+                        //
+                        // Paths are still reported, because they are useful
+                        // locally and harmless remotely once the text is here.
+                        let body = truncate_transcript(&result.transcript);
                         let text = format!(
                             "✅ Video transcribed successfully!\n\n\
                             **Video Details:**\n\
@@ -383,13 +435,12 @@ impl VideoTranscriberServer {
                             **Transcription Settings:**\n\
                             - Model: {:?}\n\
                             - Engine: whisper.cpp (Rust)\n\n\
-                            **Output Files:**\n\
+                            **Output Files** (on the server — local only):\n\
                             - Text: {}\n\
                             - JSON: {}\n\
                             - Markdown: {}\n\n\
-                            **Transcript Preview:**\n\
-                            {}\n\n\
-                            **Full transcript has {} words.**",
+                            **Transcript** ({} words):\n\
+                            {}",
                             result.metadata.title,
                             result.metadata.platform,
                             result.metadata.duration,
@@ -397,8 +448,8 @@ impl VideoTranscriberServer {
                             result.files.txt,
                             result.files.json,
                             result.files.md,
-                            result.transcript_preview,
-                            result.word_count
+                            result.word_count,
+                            body,
                         );
 
                         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
@@ -1110,4 +1161,44 @@ fn format_timestamp(timestamp: u64) -> String {
     use chrono::{DateTime, TimeZone, Utc};
     let dt: DateTime<Utc> = Utc.timestamp_opt(timestamp as i64, 0).unwrap();
     dt.format("%Y-%m-%d").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_normal_transcript_is_returned_whole() {
+        let t = "hello world ".repeat(100);
+        assert_eq!(truncate_transcript(&t), t, "nothing under the cap should change");
+    }
+
+    #[test]
+    fn an_enormous_transcript_says_it_was_cut() {
+        let t = "x".repeat(MAX_INLINE_TRANSCRIPT + 5_000);
+        let out = truncate_transcript(&t);
+        assert!(out.len() < t.len());
+        assert!(out.contains("truncated:"), "must not clip silently");
+        assert!(out.contains("bytes shown"), "must say bytes, since len() is bytes");
+        assert!(out.contains(".txt file"), "must say where the rest is");
+    }
+
+    #[test]
+    fn truncation_does_not_split_a_multibyte_character() {
+        // Vietnamese, Japanese and emoji all show up in real transcripts, and
+        // slicing mid-UTF-8 panics rather than producing bad output.
+        for filler in ["ế", "日", "🪙"] {
+            let t = filler.repeat(MAX_INLINE_TRANSCRIPT);
+            let out = truncate_transcript(&t); // panics if the cut is wrong
+            assert!(out.contains("truncated:"), "{filler} case should truncate");
+            // The byte and character counts must differ for multi-byte input,
+            // which is the whole reason the message reports both.
+            let chars = t.chars().count();
+            assert!(t.len() > chars, "{filler} should be multi-byte");
+            assert!(
+                out.contains(&format!("of {} characters", chars)),
+                "{filler}: character total should be chars, not bytes"
+            );
+        }
+    }
 }
