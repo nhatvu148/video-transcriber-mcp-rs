@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-08-09
+
+### Fixed
+
+- **`transcribe_video` returns the transcript, not just a path to it.** It
+  previously returned a ~500 character preview plus three file paths. That is
+  correct for the stdio transport, where the files land on the caller's own
+  machine — but over HTTP the paths point into the server's container, which
+  the caller cannot read, and on an ephemeral filesystem they may not survive
+  the next restart. A caller who paid for a transcription received a preview
+  and three dead paths.
+
+  The result already carried the full text; the response simply never used it.
+  Paths are still reported and labelled as server-local.
+
+  Bounded at 200,000 **bytes** — bytes rather than characters because response
+  size is what needs limiting, and the message now reports both counts. The
+  distinction matters on this content: a Vietnamese character costs three
+  bytes, so 200k bytes is roughly 65k characters. Truncation cuts on a
+  character boundary and says so, rather than clipping silently.
+
 ## [0.10.0] - 2026-08-08
 
 ### Changed
