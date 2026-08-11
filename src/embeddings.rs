@@ -40,7 +40,15 @@ pub async fn embed(texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
         .unwrap_or_else(|| DEFAULT_EMBEDDING_MODEL.to_string());
 
     let req = EmbeddingRequest { model, input: texts };
-    let client = reqwest::Client::new();
+    // reqwest has NO default request timeout, so a stalled connection waits
+    // forever. Callers treat embedding failure as best-effort and carry on, but
+    // a hang gives them nothing to carry on from — it just blocks. That is not
+    // hypothetical: an untimed OpenRouter client in the same pipeline hung a
+    // paid job for eight hours on 2026-08-10.
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .context("build embeddings HTTP client")?;
     let resp = client
         .post(OPENROUTER_EMBEDDINGS_URL)
         .bearer_auth(&api_key)
