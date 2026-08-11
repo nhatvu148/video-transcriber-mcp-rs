@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2] - 2026-08-11
+
+### Fixed
+
+- **The embeddings HTTP call can no longer hang forever.** `embed()` built its
+  client with `reqwest::Client::new()`, which has no request timeout, so a
+  stalled connection waited indefinitely rather than failing. Callers treat an
+  embedding error as best-effort and carry on, but a hang gives them nothing to
+  carry on from — it just blocks.
+
+  Not hypothetical: an untimed client in the same pipeline hung a paid job for
+  eight hours before anything noticed. The client now times out after 120s,
+  matching the shape of the whisper client, which already had 600s.
+
 ## [0.10.1] - 2026-08-09
 
 ### Fixed
