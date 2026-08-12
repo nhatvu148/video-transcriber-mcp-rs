@@ -182,7 +182,10 @@ fn lists_every_expected_tool_with_a_usable_schema() {
     }
 
     // `transcribe_video` is the one tool whose arguments actually matter.
-    let transcribe = tools.iter().find(|t| t["name"] == "transcribe_video").unwrap();
+    let transcribe = tools
+        .iter()
+        .find(|t| t["name"] == "transcribe_video")
+        .unwrap();
     assert_eq!(
         transcribe["inputSchema"]["required"],
         json!(["url"]),
@@ -256,7 +259,10 @@ fn missing_required_arguments_do_not_crash_the_server() {
 
     // …and the session must still be alive afterwards.
     let result = server.request(3, "tools/list", json!({}));
-    assert_eq!(result["tools"].as_array().unwrap().len(), EXPECTED_TOOLS.len());
+    assert_eq!(
+        result["tools"].as_array().unwrap().len(),
+        EXPECTED_TOOLS.len()
+    );
 }
 
 /// rmcp 3.x adds SEP-2322 `resultType`, but only for peers that negotiated

@@ -170,7 +170,9 @@ impl HttpServer {
             .header("content-type", "application/json")
             .header("accept", ACCEPT)
             .header("mcp-session-id", session)
-            .body(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string())
+            .body(
+                json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string(),
+            )
             .send()
             .await
             .unwrap_or_else(|e| panic!("{method} request failed: {e}"))
@@ -282,7 +284,10 @@ async fn serves_cors_headers_for_browser_clients() {
     let server = HttpServer::start().await;
 
     let response = reqwest::Client::new()
-        .request(reqwest::Method::OPTIONS, format!("{}/api/jobs", server.base))
+        .request(
+            reqwest::Method::OPTIONS,
+            format!("{}/api/jobs", server.base),
+        )
         .header("origin", "https://example.test")
         .header("access-control-request-method", "POST")
         .header("access-control-request-headers", "content-type")
@@ -302,7 +307,6 @@ async fn serves_cors_headers_for_browser_clients() {
         "preflight response is missing access-control-allow-origin"
     );
 }
-
 
 /// rmcp refuses requests whose `Host` header isn't on its allowlist — DNS
 /// rebinding protection that defaults to loopback only. A deployed instance
@@ -364,8 +368,7 @@ async fn accepts_a_host_named_in_mcp_allowed_hosts() {
 /// loopback, or local development and health checks break.
 #[tokio::test]
 async fn still_accepts_loopback_when_hosts_are_configured() {
-    let server =
-        HttpServer::start_with_env(&[("MCP_ALLOWED_HOSTS", "mcp.example.test")]).await;
+    let server = HttpServer::start_with_env(&[("MCP_ALLOWED_HOSTS", "mcp.example.test")]).await;
 
     // open_session() talks to 127.0.0.1 with the default Host header.
     let (session, init) = server.open_session().await;
@@ -377,8 +380,7 @@ async fn still_accepts_loopback_when_hosts_are_configured() {
 /// protection must narrow, never widen to "anything goes".
 #[tokio::test]
 async fn configuring_hosts_does_not_allow_every_host() {
-    let server =
-        HttpServer::start_with_env(&[("MCP_ALLOWED_HOSTS", "mcp.example.test")]).await;
+    let server = HttpServer::start_with_env(&[("MCP_ALLOWED_HOSTS", "mcp.example.test")]).await;
 
     let response = reqwest::Client::new()
         .post(format!("{}/mcp", server.base))
