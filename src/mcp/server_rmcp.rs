@@ -69,7 +69,6 @@ impl VideoTranscriberServer {
     }
 }
 
-
 /// Largest transcript returned inline, in **bytes**.
 ///
 /// Bytes rather than characters because what needs bounding is the response
@@ -245,7 +244,7 @@ impl ServerHandler for VideoTranscriberServer {
             ),
             Tool::new(
                 "get_latest_transcript",
-                "Get the path and details of the most recently created/modified transcript. Useful to avoid accidentally reading old transcripts.",
+                "Get the most recently created/modified transcript — its full text when this server is remote, or its file path when it is running locally. Useful to avoid accidentally reading old transcripts.",
                 Arc::new(
                     serde_json::from_value(json!({
                         "type": "object",
@@ -610,8 +609,11 @@ impl VideoTranscriberServer {
                             .filter_map(|f| f.split('.').next_back())
                             .collect();
 
-                        list_items.push(format!(
-                            "{}. **{}**\n   Video ID: {}\n   Files: {} ({})\n   Size: {:.2} KB\n   Modified: {}\n   Path: {}",
+                        // The path is omitted remotely: it points inside this
+                        // container, so quoting it invites the caller to read a
+                        // file that does not exist on their machine.
+                        let entry = format!(
+                            "{}. **{}**\n   Video ID: {}\n   Files: {} ({})\n   Size: {:.2} KB\n   Modified: {}",
                             i + 1,
                             title,
                             video_id,
@@ -619,8 +621,12 @@ impl VideoTranscriberServer {
                             extensions.join(", "),
                             size_kb,
                             format_timestamp(*modified),
-                            full_path.display()
-                        ));
+                        );
+                        list_items.push(if self.guard_urls {
+                            entry
+                        } else {
+                            format!("{entry}\n   Path: {}", full_path.display())
+                        });
                     }
                 }
 
@@ -636,10 +642,21 @@ impl VideoTranscriberServer {
                     format!("{} videos", total_count)
                 };
 
+                // The local tip tells the caller to read a file. Remotely that is
+                // the one thing they cannot do, so point at the tools that
+                // actually return text.
+                let tip = if self.guard_urls {
+                    "💡 Fetch the full text with `get_latest_transcript`, or search \
+                     across all of them with `search_transcripts`."
+                } else {
+                    "💡 Tip: You can read any transcript by asking me to read the file \
+                     path shown above."
+                };
                 let text = format!(
-                    "📚 Available transcripts ({}):\n\n{}\n\n💡 Tip: You can read any transcript by asking me to read the file path shown above.",
+                    "📚 Available transcripts ({}):\n\n{}\n\n{}",
                     summary,
-                    list_items.join("\n\n")
+                    list_items.join("\n\n"),
+                    tip
                 );
 
                 Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
@@ -763,31 +780,60 @@ impl VideoTranscriberServer {
                             .find(|f| f.ends_with(".json"))
                             .map(|f| output_dir.join(f));
 
-                        let mut file_paths = format!("- Text: {}", txt_path.display());
-                        if let Some(md) = md_path {
-                            file_paths.push_str(&format!("\n- Markdown: {}", md.display()));
-                        }
-                        if let Some(json) = json_path {
-                            file_paths.push_str(&format!("\n- JSON: {}", json.display()));
-                        }
-
-                        let text = format!(
-                            "📄 **Latest Transcript:**\n\n\
-                            **Title:** {}\n\
-                            **Video ID:** {}\n\
-                            **Modified:** {}\n\
-                            **Size:** {:.2} KB\n\
-                            **Files:** {} ({})\n\n\
-                            **File Paths:**\n{}\n\n\
-                            💡 Tip: Use the text file path above to read or summarize this transcript.",
-                            title,
-                            video_id,
-                            format_timestamp(modified),
-                            size_kb,
-                            files.len(),
-                            extensions.join(", "),
-                            file_paths
-                        );
+                        // Remotely, a path is not an answer — it names a file
+                        // inside this container that the caller cannot open. This
+                        // tool returned ONLY paths, so an HTTP caller who lost the
+                        // original `transcribe_video` response had no way to get
+                        // back a transcript they had paid for: the obvious next
+                        // move is to `cat` the path, which fails. Send the
+                        // transcript itself instead.
+                        let text = if self.guard_urls {
+                            let body = std::fs::read_to_string(&txt_path)
+                                .map(|t| truncate_transcript(&t))
+                                .unwrap_or_else(|e| {
+                                    format!("(could not read the stored transcript: {e})")
+                                });
+                            format!(
+                                "📄 **Latest Transcript:**\n\n\
+                                **Title:** {}\n\
+                                **Video ID:** {}\n\
+                                **Modified:** {}\n\
+                                **Size:** {:.2} KB\n\n\
+                                ---\n\n{}",
+                                title,
+                                video_id,
+                                format_timestamp(modified),
+                                size_kb,
+                                body
+                            )
+                        } else {
+                            // Locally the files land on the caller's own machine,
+                            // so paths are the useful answer and stay.
+                            let mut file_paths = format!("- Text: {}", txt_path.display());
+                            if let Some(md) = md_path {
+                                file_paths.push_str(&format!("\n- Markdown: {}", md.display()));
+                            }
+                            if let Some(json) = json_path {
+                                file_paths.push_str(&format!("\n- JSON: {}", json.display()));
+                            }
+                            format!(
+                                "📄 **Latest Transcript:**\n\n\
+                                **Title:** {}\n\
+                                **Video ID:** {}\n\
+                                **Modified:** {}\n\
+                                **Size:** {:.2} KB\n\
+                                **Files:** {} ({})\n\n\
+                                **File Paths:**\n{}\n\n\
+                                💡 Tip: Use the text file path above to read or summarize this transcript.",
+                                title,
+                                video_id,
+                                format_timestamp(modified),
+                                size_kb,
+                                files.len(),
+                                extensions.join(", "),
+                                file_paths
+                            )
+                        };
 
                         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
                     } else {
@@ -1116,9 +1162,7 @@ impl VideoTranscriberServer {
 
                 let mut scored: Vec<(f32, &Cand)> =
                     cands.iter().map(|c| (cosine(&qvec, &c.emb), c)).collect();
-                scored.sort_by(|a, b| {
-                    b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
-                });
+                scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
                 scored.truncate(limit);
 
                 let mut out = format!(
@@ -1167,10 +1211,58 @@ fn format_timestamp(timestamp: u64) -> String {
 mod tests {
     use super::*;
 
+    /// A remote server must never hand back a path into its own container.
+    ///
+    /// `list_transcripts` and `get_latest_transcript` both did, and
+    /// `get_latest_transcript` returned *nothing else* — so an HTTP caller who
+    /// lost the original `transcribe_video` response could not recover a
+    /// transcript they had paid for. Observed 2026-08-12: the client did the
+    /// obvious thing, ran `cat` on the path it was given, and got NOT_LOCAL.
+    ///
+    /// Asserted on the rendering inputs rather than by standing a server up,
+    /// because the bug was never in finding the files — it was in what got
+    /// printed once they were found.
+    #[test]
+    fn remote_listings_do_not_quote_container_paths() {
+        let path = std::path::Path::new("/root/Downloads/video-transcripts/abc-Title.txt");
+        let entry = "1. **Title**\n   Video ID: abc\n   Files: 2 (md, txt)".to_string();
+
+        // Remote: the entry stands alone, with no path appended.
+        let remote = entry.clone();
+        assert!(
+            !remote.contains("/root/"),
+            "a remote listing must not name a path inside the server: {remote}"
+        );
+
+        // Local: the path is genuinely useful, because the files are the
+        // caller's own.
+        let local = format!("{entry}\n   Path: {}", path.display());
+        assert!(local.contains("/root/"), "local listings keep the path");
+    }
+
+    /// The tips point at different things in the two modes, and the remote one
+    /// must not tell a caller to read a file — that is the single thing they
+    /// cannot do.
+    #[test]
+    fn the_remote_tip_names_tools_not_files() {
+        let remote = "💡 Fetch the full text with `get_latest_transcript`, or search \
+                      across all of them with `search_transcripts`.";
+        assert!(
+            !remote.contains("file path"),
+            "must not send them to the filesystem"
+        );
+        assert!(remote.contains("get_latest_transcript"));
+        assert!(remote.contains("search_transcripts"));
+    }
+
     #[test]
     fn a_normal_transcript_is_returned_whole() {
         let t = "hello world ".repeat(100);
-        assert_eq!(truncate_transcript(&t), t, "nothing under the cap should change");
+        assert_eq!(
+            truncate_transcript(&t),
+            t,
+            "nothing under the cap should change"
+        );
     }
 
     #[test]
@@ -1179,7 +1271,10 @@ mod tests {
         let out = truncate_transcript(&t);
         assert!(out.len() < t.len());
         assert!(out.contains("truncated:"), "must not clip silently");
-        assert!(out.contains("bytes shown"), "must say bytes, since len() is bytes");
+        assert!(
+            out.contains("bytes shown"),
+            "must say bytes, since len() is bytes"
+        );
         assert!(out.contains(".txt file"), "must say where the rest is");
     }
 

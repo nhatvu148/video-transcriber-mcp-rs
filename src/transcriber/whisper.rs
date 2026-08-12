@@ -58,9 +58,7 @@ impl WhisperTranscriber {
         status.push_str("📦 Whisper Models:\n");
 
         if remote_whisper_url().is_some() {
-            status.push_str(
-                "  (remote: REMOTE_WHISPER_URL is set — local models unused)\n",
-            );
+            status.push_str("  (remote: REMOTE_WHISPER_URL is set — local models unused)\n");
         }
 
         for model in [
@@ -115,10 +113,7 @@ async fn transcribe_remote(
     model: WhisperModel,
     language: Option<&str>,
 ) -> Result<(String, Vec<Segment>)> {
-    info!(
-        "🛰  Transcribing via remote Whisper ({}): {:?}",
-        url, model
-    );
+    info!("🛰  Transcribing via remote Whisper ({}): {:?}", url, model);
 
     let bytes = tokio::fs::read(audio_path)
         .await

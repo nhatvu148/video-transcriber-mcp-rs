@@ -64,7 +64,9 @@ impl TranscriberEngine {
                 "1",
                 "-b:a",
                 "32k",
-                out_path.to_str().context("output path is not valid UTF-8")?,
+                out_path
+                    .to_str()
+                    .context("output path is not valid UTF-8")?,
             ])
             .output()
             .await
@@ -192,10 +194,7 @@ impl TranscriberEngine {
             transcript.clone()
         };
 
-        info!(
-            "✅ Transcription complete! ({} segments)",
-            segments.len()
-        );
+        info!("✅ Transcription complete! ({} segments)", segments.len());
 
         Ok(TranscriptionResult {
             success: true,

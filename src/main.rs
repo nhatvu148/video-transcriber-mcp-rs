@@ -117,7 +117,10 @@ async fn run_http_transport(host: &str, port: u16) -> Result<()> {
             mcp_config.allowed_hosts.join(", ")
         );
     } else {
-        tracing::info!("MCP transport also accepting Host: {}", configured.join(", "));
+        tracing::info!(
+            "MCP transport also accepting Host: {}",
+            configured.join(", ")
+        );
         mcp_config.allowed_hosts.extend(configured);
     }
 

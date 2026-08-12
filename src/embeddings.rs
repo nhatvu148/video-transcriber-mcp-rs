@@ -39,7 +39,10 @@ pub async fn embed(texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_EMBEDDING_MODEL.to_string());
 
-    let req = EmbeddingRequest { model, input: texts };
+    let req = EmbeddingRequest {
+        model,
+        input: texts,
+    };
     // reqwest has NO default request timeout, so a stalled connection waits
     // forever. Callers treat embedding failure as best-effort and carry on, but
     // a hang gives them nothing to carry on from — it just blocks. That is not

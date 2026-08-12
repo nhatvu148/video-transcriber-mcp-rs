@@ -27,7 +27,6 @@
 //! the caller already has a shell. So the guard is applied by callers that are
 //! remotely reachable, not unconditionally.
 
-
 /// Allow any host, leaving only the internal-address checks.
 ///
 /// For entry points whose acceptable sites genuinely cannot be enumerated —
@@ -270,7 +269,6 @@ mod ssrf_tests {
     use super::*;
     use std::net::IpAddr;
 
-
     fn ip(s: &str) -> IpAddr {
         s.parse().expect("test ip")
     }
@@ -304,8 +302,8 @@ mod ssrf_tests {
             "64:ff9b::a9fe:a9fe",
             "64:ff9b::7f00:1",
             // IPv4-compatible ::a.b.c.d — the deprecated form.
-            "::7f00:1",      // 127.0.0.1
-            "::a9fe:a9fe",   // 169.254.169.254
+            "::7f00:1",    // 127.0.0.1
+            "::a9fe:a9fe", // 169.254.169.254
         ] {
             assert!(is_internal_ip(ip(s)), "{s} must be treated as internal");
         }
@@ -372,26 +370,42 @@ mod ssrf_tests {
     async fn an_allowed_public_host_passes_every_check() {
         // IP literal + a config naming it, so the positive path is exercised
         // end-to-end without depending on DNS in CI.
-        assert!(reject_internal_url("https://8.8.8.8/video.mp4", "8.8.8.8").await.is_ok());
+        assert!(
+            reject_internal_url("https://8.8.8.8/video.mp4", "8.8.8.8")
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
     async fn the_refusal_message_does_not_describe_the_network() {
         // The caller should learn "no", not what is reachable from in here.
-        let msg = reject_internal_url("http://169.254.169.254/", "*").await.unwrap_err();
+        let msg = reject_internal_url("http://169.254.169.254/", "*")
+            .await
+            .unwrap_err();
         assert!(!msg.contains("169.254"), "must not echo the address: {msg}");
-        assert!(!msg.to_lowercase().contains("private"), "must not hint at topology: {msg}");
+        assert!(
+            !msg.to_lowercase().contains("private"),
+            "must not hint at topology: {msg}"
+        );
     }
 
     #[test]
     fn allowlist_matches_on_a_label_boundary() {
         let cfg = DEFAULT_ALLOWED_HOSTS;
         for good in [
-            "youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be",
+            "youtube.com",
+            "www.youtube.com",
+            "m.youtube.com",
+            "youtu.be",
             // Every platform the UI names must work, or Free mode refuses
             // something the page told the user it supports.
-            "vimeo.com", "www.tiktok.com", "twitter.com", "x.com",
-            "www.twitch.tv", "www.coursera.org",
+            "vimeo.com",
+            "www.tiktok.com",
+            "twitter.com",
+            "x.com",
+            "www.twitch.tv",
+            "www.coursera.org",
         ] {
             assert!(host_is_allowed_by(good, cfg), "{good} should be allowed");
         }
@@ -437,9 +451,12 @@ mod ssrf_tests {
             "http://[::1]/x",
             "http://[::ffff:127.0.0.1]/x",
             "http://[fe80::1]/x",
-            "http://[2002:a9fe:a9fe::1]/x",  // 6to4 wrapping 169.254.169.254
+            "http://[2002:a9fe:a9fe::1]/x", // 6to4 wrapping 169.254.169.254
         ] {
-            assert!(reject_internal_url(u, "*").await.is_err(), "{u} must be refused");
+            assert!(
+                reject_internal_url(u, "*").await.is_err(),
+                "{u} must be refused"
+            );
         }
         // ...and a public v6 literal is now reachable rather than "unreachable".
         assert!(
@@ -455,7 +472,11 @@ mod ssrf_tests {
         // Fast mode advertises 1000+ platforms, so it cannot use the allowlist.
         // ANY_HOST keeps arbitrary public hosts working while still refusing
         // addresses that resolve into our own network.
-        assert!(reject_internal_url("https://8.8.8.8/v.mp4", ANY_HOST).await.is_ok());
+        assert!(
+            reject_internal_url("https://8.8.8.8/v.mp4", ANY_HOST)
+                .await
+                .is_ok()
+        );
         for u in [
             "http://169.254.169.254/latest/meta-data/",
             "http://127.0.0.1:8080/api/jobs",
