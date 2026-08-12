@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.5] - 2026-08-12
+
+### Fixed
+
+- **Remote servers no longer name paths on their own disk.** 0.10.3 and 0.10.4
+  each fixed the one leak that had just been reported; the caller was shown a
+  server path again immediately, twice. There were fifteen renderings of the
+  same mistake.
+
+  The real source was the **tool catalogue**: seven `output_dir` schemas
+  advertised `Defaults to /root/Downloads/video-transcripts` to every client on
+  `tools/list`, before a single tool ran. That is the likeliest way an agent
+  learned a path it then tried to `cat`.
+
+  `transcribe_video` also still listed its output files, labelled "(on the
+  server — local only)", on the reasoning that they were harmless once the
+  transcript was included. They were not: an agent reads a path and surfaces it,
+  and a label does not stop that, because the path is still the most
+  actionable-looking thing in the response.
+
+  All fifteen are now behind `guard_urls` — seven tool schemas, both empty-state
+  branches, the listing entry, the transcribe output block, the delete summary
+  and the search error. Local stdio is unchanged: there the files are the
+  caller's own and naming them is the useful answer.
+
+## [0.10.4] - 2026-08-12
+
+### Fixed
+
+- **The empty-state message leaked the path too.** 0.10.3 stopped the populated
+  listing from naming the container directory, but the "no transcripts yet"
+  branch still announced it — which is exactly where it showed up, because
+  deploying 0.10.3 cleared the ephemeral directory and the very next call took
+  the empty path.
+
+## [0.10.3] - 2026-08-12
+
+### Fixed
+
+- **`get_latest_transcript` returns the transcript, not just paths.** It
+  reported file paths and nothing else, so an HTTP caller who lost the original
+  `transcribe_video` response had no way to recover a transcript they had paid
+  for. Remotely it now returns the text; locally the paths stay, because there
+  the files are the caller's own.
+
+- **`list_transcripts` no longer quotes a path a remote caller cannot open**,
+  and its tip names `get_latest_transcript` and `search_transcripts` instead of
+  telling the caller to read a file — the one thing they cannot do.
+
 ## [0.10.2] - 2026-08-11
 
 ### Fixed
