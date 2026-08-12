@@ -4,7 +4,7 @@ categories = ["multimedia::audio", "multimedia::video"]
 description = "High-performance video transcription MCP server using whisper.cpp for faster transcription"
 edition = "2024"
 keywords = ["whisper", "transcription", "mcp", "video", "audio"]
-license = "MIT"
+license = "MIT OR Apache-2.0"
 name = "video-transcriber-mcp"
 repository = "https://github.com/nhatvu148/video-transcriber-mcp-rs"
 # 0.10 rather than 0.9.1: the library's public surface shrank. `api`, `auth`,
