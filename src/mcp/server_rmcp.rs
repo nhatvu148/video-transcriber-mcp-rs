@@ -158,7 +158,16 @@ impl ServerHandler for VideoTranscriberServer {
                             },
                             "output_dir": {
                                 "type": "string",
-                                "description": format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
+                                // Remotely this named a directory inside the
+                                // server's container in the TOOL CATALOGUE —
+                                // every client saw it before calling anything,
+                                // which is the likeliest way an agent learned a
+                                // path it then tried to read.
+                                "description": if self.guard_urls {
+                                    "Optional output directory on the server. Leave unset.".to_string()
+                                } else {
+                                    format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
+                                }
                             },
                             "model": {
                                 "type": "string",
@@ -206,7 +215,16 @@ impl ServerHandler for VideoTranscriberServer {
                         "properties": {
                             "output_dir": {
                                 "type": "string",
-                                "description": format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
+                                // Remotely this named a directory inside the
+                                // server's container in the TOOL CATALOGUE —
+                                // every client saw it before calling anything,
+                                // which is the likeliest way an agent learned a
+                                // path it then tried to read.
+                                "description": if self.guard_urls {
+                                    "Optional output directory on the server. Leave unset.".to_string()
+                                } else {
+                                    format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
+                                }
                             },
                             "limit": {
                                 "type": "number",
@@ -234,7 +252,11 @@ impl ServerHandler for VideoTranscriberServer {
                             },
                             "output_dir": {
                                 "type": "string",
-                                "description": format!("Optional transcripts directory. Defaults to {}", get_default_output_dir().display())
+                                "description": if self.guard_urls {
+                                    "Optional transcripts directory on the server. Leave unset.".to_string()
+                                } else {
+                                    format!("Optional transcripts directory. Defaults to {}", get_default_output_dir().display())
+                                }
                             }
                         },
                         "required": ["query"]
@@ -251,7 +273,16 @@ impl ServerHandler for VideoTranscriberServer {
                         "properties": {
                             "output_dir": {
                                 "type": "string",
-                                "description": format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
+                                // Remotely this named a directory inside the
+                                // server's container in the TOOL CATALOGUE —
+                                // every client saw it before calling anything,
+                                // which is the likeliest way an agent learned a
+                                // path it then tried to read.
+                                "description": if self.guard_urls {
+                                    "Optional output directory on the server. Leave unset.".to_string()
+                                } else {
+                                    format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
+                                }
                             }
                         }
                     }))
@@ -271,7 +302,16 @@ impl ServerHandler for VideoTranscriberServer {
                             },
                             "output_dir": {
                                 "type": "string",
-                                "description": format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
+                                // Remotely this named a directory inside the
+                                // server's container in the TOOL CATALOGUE —
+                                // every client saw it before calling anything,
+                                // which is the likeliest way an agent learned a
+                                // path it then tried to read.
+                                "description": if self.guard_urls {
+                                    "Optional output directory on the server. Leave unset.".to_string()
+                                } else {
+                                    format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
+                                }
                             }
                         },
                         "required": ["video_id"]
@@ -292,7 +332,16 @@ impl ServerHandler for VideoTranscriberServer {
                             },
                             "output_dir": {
                                 "type": "string",
-                                "description": format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
+                                // Remotely this named a directory inside the
+                                // server's container in the TOOL CATALOGUE —
+                                // every client saw it before calling anything,
+                                // which is the likeliest way an agent learned a
+                                // path it then tried to read.
+                                "description": if self.guard_urls {
+                                    "Optional output directory on the server. Leave unset.".to_string()
+                                } else {
+                                    format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
+                                }
                             }
                         },
                         "required": ["days"]
@@ -309,7 +358,16 @@ impl ServerHandler for VideoTranscriberServer {
                         "properties": {
                             "output_dir": {
                                 "type": "string",
-                                "description": format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
+                                // Remotely this named a directory inside the
+                                // server's container in the TOOL CATALOGUE —
+                                // every client saw it before calling anything,
+                                // which is the likeliest way an agent learned a
+                                // path it then tried to read.
+                                "description": if self.guard_urls {
+                                    "Optional output directory on the server. Leave unset.".to_string()
+                                } else {
+                                    format!("Optional output directory path. Defaults to {}", get_default_output_dir().display())
+                                }
                             },
                             "confirm": {
                                 "type": "boolean",
@@ -422,10 +480,8 @@ impl VideoTranscriberServer {
                         // next restart. A caller who paid for a transcription
                         // should get the transcription.
                         //
-                        // Paths are still reported, because they are useful
-                        // locally and harmless remotely once the text is here.
                         let body = truncate_transcript(&result.transcript);
-                        let text = format!(
+                        let header = format!(
                             "✅ Video transcribed successfully!\n\n\
                             **Video Details:**\n\
                             - Title: {}\n\
@@ -433,22 +489,36 @@ impl VideoTranscriberServer {
                             - Duration: {}s\n\n\
                             **Transcription Settings:**\n\
                             - Model: {:?}\n\
-                            - Engine: whisper.cpp (Rust)\n\n\
-                            **Output Files** (on the server — local only):\n\
-                            - Text: {}\n\
-                            - JSON: {}\n\
-                            - Markdown: {}\n\n\
-                            **Transcript** ({} words):\n\
-                            {}",
+                            - Engine: whisper.cpp (Rust)\n",
                             result.metadata.title,
                             result.metadata.platform,
                             result.metadata.duration,
                             result.model_used,
-                            result.files.txt,
-                            result.files.json,
-                            result.files.md,
-                            result.word_count,
-                            body,
+                        );
+
+                        // An earlier version listed the output paths here even
+                        // remotely, labelled "(on the server — local only)", on
+                        // the reasoning that they were harmless once the text was
+                        // included. They are not. An agent reads a path and
+                        // surfaces it: callers were shown
+                        // `/root/Downloads/video-transcripts/…` and offered a
+                        // copy of a file that exists on nobody's machine. A label
+                        // does not stop that, because the path is still the most
+                        // actionable-looking thing in the response.
+                        //
+                        // Locally the files really are the caller's, so they stay.
+                        let files = if self.guard_urls {
+                            String::new()
+                        } else {
+                            format!(
+                                "\n**Output Files:**\n- Text: {}\n- JSON: {}\n- Markdown: {}\n",
+                                result.files.txt, result.files.json, result.files.md,
+                            )
+                        };
+
+                        let text = format!(
+                            "{header}{files}\n**Transcript** ({} words):\n{}",
+                            result.word_count, body,
                         );
 
                         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
@@ -550,10 +620,14 @@ impl VideoTranscriberServer {
                 }
 
                 if video_groups.is_empty() {
-                    let text = format!(
-                        "📂 No transcripts found in {}\n\nTranscribe a video to get started!",
-                        output_dir.display()
-                    );
+                    let text = if self.guard_urls {
+                        "📂 No transcripts found.\n\nTranscribe a video to get started!".to_string()
+                    } else {
+                        format!(
+                            "📂 No transcripts found in {}\n\nTranscribe a video to get started!",
+                            output_dir.display()
+                        )
+                    };
                     return Ok(CallToolResult::success(vec![ContentBlock::text(text)]));
                 }
 
@@ -716,10 +790,14 @@ impl VideoTranscriberServer {
                 }
 
                 if video_groups.is_empty() {
-                    let text = format!(
-                        "📂 No transcripts found in {}\n\nTranscribe a video to get started!",
-                        output_dir.display()
-                    );
+                    let text = if self.guard_urls {
+                        "📂 No transcripts found.\n\nTranscribe a video to get started!".to_string()
+                    } else {
+                        format!(
+                            "📂 No transcripts found in {}\n\nTranscribe a video to get started!",
+                            output_dir.display()
+                        )
+                    };
                     return Ok(CallToolResult::success(vec![ContentBlock::text(text)]));
                 }
 
@@ -1044,11 +1122,15 @@ impl VideoTranscriberServer {
                     let text = "📂 No transcripts found to delete.".to_string();
                     Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
                 } else {
-                    let text = format!(
-                        "🗑️ Deleted ALL transcripts: {} file(s) removed from {}",
-                        deleted_count,
-                        output_dir.display()
-                    );
+                    let text = if self.guard_urls {
+                        format!("🗑️ Deleted ALL transcripts: {deleted_count} file(s) removed.")
+                    } else {
+                        format!(
+                            "🗑️ Deleted ALL transcripts: {} file(s) removed from {}",
+                            deleted_count,
+                            output_dir.display()
+                        )
+                    };
                     Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
                 }
             }
@@ -1085,10 +1167,12 @@ impl VideoTranscriberServer {
                     .unwrap_or_else(get_default_output_dir);
 
                 if !output_dir.exists() {
-                    return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-                        "📂 No transcripts directory at {}.",
-                        output_dir.display()
-                    ))]));
+                    let text = if self.guard_urls {
+                        "📂 No transcripts to search yet.".to_string()
+                    } else {
+                        format!("📂 No transcripts directory at {}.", output_dir.display())
+                    };
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(text)]));
                 }
 
                 // Load every embedded chunk from the saved JSONs.
