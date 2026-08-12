@@ -517,10 +517,17 @@ impl VideoTranscriberServer {
                     .map(|n| n as usize);
 
                 if !output_dir.exists() {
-                    let text = format!(
-                        "📂 No transcripts directory found at: {}\n\nTranscribe your first video to create it!",
-                        output_dir.display()
-                    );
+                    // Naming the directory is only useful to someone who can
+                    // look in it. Remotely it is one more unreachable path.
+                    let text = if self.guard_urls {
+                        "📂 No transcripts yet.\n\nTranscribe your first video to create one!"
+                            .to_string()
+                    } else {
+                        format!(
+                            "📂 No transcripts directory found at: {}\n\nTranscribe your first video to create it!",
+                            output_dir.display()
+                        )
+                    };
                     return Ok(CallToolResult::success(vec![ContentBlock::text(text)]));
                 }
 
@@ -676,10 +683,17 @@ impl VideoTranscriberServer {
                     .unwrap_or_else(get_default_output_dir);
 
                 if !output_dir.exists() {
-                    let text = format!(
-                        "📂 No transcripts directory found at: {}\n\nTranscribe your first video to create it!",
-                        output_dir.display()
-                    );
+                    // Naming the directory is only useful to someone who can
+                    // look in it. Remotely it is one more unreachable path.
+                    let text = if self.guard_urls {
+                        "📂 No transcripts yet.\n\nTranscribe your first video to create one!"
+                            .to_string()
+                    } else {
+                        format!(
+                            "📂 No transcripts directory found at: {}\n\nTranscribe your first video to create it!",
+                            output_dir.display()
+                        )
+                    };
                     return Ok(CallToolResult::success(vec![ContentBlock::text(text)]));
                 }
 
