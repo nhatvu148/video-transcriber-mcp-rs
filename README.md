@@ -52,6 +52,17 @@ sudo mv video-transcriber-mcp /usr/local/bin/
 
 **Note:** You'll need to manually install dependencies: `yt-dlp`, `ffmpeg`
 
+### Claude Code plugin
+
+Installs the MCP server and a `/transcribe` skill in one step:
+
+```bash
+/plugin marketplace add nhatvu148/video-transcriber-mcp-rs
+/plugin install video-transcriber@nhatvu148-tools
+```
+
+The plugin registers the MCP server for you, but it does **not** install the binary — run one of the install commands above first, so `video-transcriber-mcp` is on your `PATH`.
+
 ## 🎯 Why Rust?
 
 This version uses **whisper.cpp** (C++ implementation with Rust bindings) instead of Python's OpenAI Whisper:

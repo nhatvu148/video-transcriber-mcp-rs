@@ -1,0 +1,30 @@
+# Smithery listing for the locally-installed native binary.
+#
+# This server is a Rust binary, not an npm package — there is no `npx`
+# equivalent for cargo. Install it first:
+#
+#   brew install nhatvu148/tap/video-transcriber-mcp   (also installs yt-dlp, ffmpeg, cmake)
+#   cargo install video-transcriber-mcp                (deps installed separately)
+#
+# Smithery then launches the binary over stdio.
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      openrouterApiKey:
+        type: string
+        title: OpenRouter API key
+        description: >-
+          Optional. Enables the semantic `search_transcripts` tool by embedding
+          each transcript as it is saved. Transcription itself is 100% offline
+          and works without this.
+    required: []
+  commandFunction: |-
+    (config) => ({
+      command: 'video-transcriber-mcp',
+      args: [],
+      env: config.openrouterApiKey
+        ? { OPENROUTER_API_KEY: config.openrouterApiKey }
+        : {}
+    })

@@ -1,0 +1,27 @@
+{
+  "name": "nhatvu148-tools",
+  "description": "MCP servers and skills by nhatvu148.",
+  "owner": {
+    "name": "nhatvu148",
+    "url": "https://github.com/nhatvu148"
+  },
+  "plugins": [
+    {
+      "name": "video-transcriber",
+      "source": "./",
+      "displayName": "Video Transcriber",
+      "description": "Transcribe any video — 1000+ platforms or a local file — with whisper.cpp, then search across everything you've transcribed. Native Rust binary, runs offline.",
+      "category": "productivity",
+      "tags": [
+        "video",
+        "transcription",
+        "whisper",
+        "youtube",
+        "offline",
+        "search"
+      ],
+      "homepage": "https://github.com/nhatvu148/video-transcriber-mcp-rs#readme",
+      "license": "MIT OR Apache-2.0"
+    }
+  ]
+}

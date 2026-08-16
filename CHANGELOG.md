@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Discovery surfaces.** The server was installable four ways and listed in
+  zero indexes — Homebrew, crates.io, and GitHub Releases are good
+  distribution for a native binary, but nobody browses those looking for an
+  MCP server.
+
+  - `server.json` — the official MCP registry. `registryType: "cargo"` means
+    the existing crates.io publish *is* the distribution; no npm wrapper.
+  - `.claude-plugin/` — a Claude Code marketplace and plugin, so
+    `/plugin install video-transcriber@nhatvu148-tools` registers the MCP
+    server and the `/transcribe` skill together. The MCP config is inline in
+    `plugin.json` rather than a root `.mcp.json`, which would otherwise
+    register as a project-scoped server every time this repo is opened.
+  - `skills/transcribe/SKILL.md` — routing between the nine tools, model
+    selection, and the two failure modes worth naming (cookies for gated
+    videos; a wrong `language` rather than a broken transcription).
+  - `glama.json`, `smithery.yaml` — maintainer claim and a stdio launch spec.
+
+  The marketplace is named `nhatvu148-tools`, not after this repo: only one
+  marketplace can be registered per name, so this leaves room for other
+  servers to join the same catalogue later.
+
 ## [0.10.5] - 2026-08-12
 
 ### Fixed

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.nhatvu148/video-transcriber-mcp",
+  "title": "Video Transcriber",
+  "description": "Transcribe videos from 1000+ platforms or local files offline, and search across every transcript",
+  "version": "0.10.5",
+  "websiteUrl": "https://github.com/nhatvu148/video-transcriber-mcp-rs#readme",
+  "repository": {
+    "url": "https://github.com/nhatvu148/video-transcriber-mcp-rs",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "cargo",
+      "registryBaseUrl": "https://crates.io",
+      "identifier": "video-transcriber-mcp",
+      "version": "0.10.5",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "OPENROUTER_API_KEY",
+          "description": "Enables the semantic `search_transcripts` tool by embedding each transcript as it is saved. Transcription itself stays 100% offline and works without this.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "YT_DLP_COOKIES_FROM_BROWSER",
+          "description": "Browser to pull cookies from for age-restricted or login-gated videos (e.g. 'firefox', 'chrome', 'brave').",
+          "isRequired": false
+        },
+        {
+          "name": "YT_DLP_COOKIES",
+          "description": "Path to a Netscape-format cookies.txt file, as an alternative to YT_DLP_COOKIES_FROM_BROWSER.",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}

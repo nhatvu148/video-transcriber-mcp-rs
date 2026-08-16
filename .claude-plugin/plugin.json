@@ -1,0 +1,42 @@
+{
+  "name": "video-transcriber",
+  "displayName": "Video Transcriber",
+  "version": "0.10.5",
+  "description": "Transcribe any video — 1000+ platforms or a local file — with whisper.cpp, then search across everything you've transcribed. Native Rust binary, runs offline.",
+  "author": {
+    "name": "nhatvu148",
+    "url": "https://github.com/nhatvu148"
+  },
+  "homepage": "https://github.com/nhatvu148/video-transcriber-mcp-rs#readme",
+  "repository": "https://github.com/nhatvu148/video-transcriber-mcp-rs",
+  "license": "MIT OR Apache-2.0",
+  "keywords": [
+    "video",
+    "transcription",
+    "whisper",
+    "whisper-cpp",
+    "youtube",
+    "yt-dlp",
+    "subtitles",
+    "offline",
+    "rust"
+  ],
+  "userConfig": {
+    "openrouter_api_key": {
+      "type": "string",
+      "title": "OpenRouter API key",
+      "description": "Optional. Enables semantic search across your saved transcripts by embedding each one as it is written. Transcription works fully offline without this.",
+      "sensitive": true,
+      "required": false
+    }
+  },
+  "mcpServers": {
+    "video-transcriber": {
+      "command": "video-transcriber-mcp",
+      "args": [],
+      "env": {
+        "OPENROUTER_API_KEY": "${user_config.openrouter_api_key}"
+      }
+    }
+  }
+}
