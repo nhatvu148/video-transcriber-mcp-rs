@@ -30,6 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   marketplace can be registered per name, so this leaves room for other
   servers to join the same catalogue later.
 
+- **`scripts/sync-versions.py`, wired into CI.** `server.json` and
+  `plugin.json` each restate the version and nothing in the release flow
+  bumps them, so they would have drifted from `Cargo.toml` on the next
+  release. A stale `server.json` is worse than a missing one: the MCP
+  registry takes it at face value and goes on advertising a release
+  crates.io has already moved past.
+
+  `task version:sync` rewrites them from `Cargo.toml`; `task version:check`
+  fails on drift and now runs in CI and in `release:check`.
+
 ## [0.10.5] - 2026-08-12
 
 ### Fixed

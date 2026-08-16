@@ -46,6 +46,13 @@ jobs:
       - name: Test
         run: cargo test --all-targets
 
+      # Cargo.toml is the source of truth for the version; server.json and
+      # plugin.json restate it and nothing in the release flow bumps them.
+      # A stale server.json makes the MCP registry advertise a release that
+      # crates.io has already moved past, so drift fails the build.
+      - name: Version manifests in sync
+        run: python3 scripts/sync-versions.py --check
+
 
   check:
     # Linux is covered by the `test` job. This catches platform-specific
