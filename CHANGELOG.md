@@ -40,6 +40,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `task version:sync` rewrites them from `Cargo.toml`; `task version:check`
   fails on drift and now runs in CI and in `release:check`.
 
+- **`mcp-name:` ownership token in the README.** The MCP registry will not
+  accept `server.json` until the crate's *rendered* README on crates.io
+  contains `mcp-name: io.github.nhatvu148/video-transcriber-mcp`.
+
+  It has to be visible text. The registry docs say the token may be hidden in
+  an HTML comment, but that is written for PyPI and NuGet — crates.io strips
+  HTML comments when it renders a README (verified: tokio's README has one in
+  source and none in its rendered output; clap's has four). A commented token
+  would have failed validation with no way to see why.
+
+  Because crates.io versions are immutable, the token only counts from the
+  next publish: the version named in `server.json` must be a release whose
+  README already carries it.
+
 ## [0.10.5] - 2026-08-12
 
 ### Fixed
