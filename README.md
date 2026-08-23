@@ -485,10 +485,6 @@ Contributions welcome! Please:
 4. Add tests if applicable
 5. Submit a pull request
 
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) file for details
-
 ## 🙏 Acknowledgments
 
 - [whisper.cpp](https://github.com/ggerganov/whisper.cpp) - Fast C++ implementation of Whisper
