@@ -298,6 +298,15 @@ fn load_audio_as_pcm(audio_path: &Path) -> Result<Vec<f32>> {
     }
 
     let bytes = output.stdout;
+    // clippy (1.98+) suggests `as_chunks::<4>()`, which is nicer — it drops the
+    // infallible `try_into().unwrap()` below. It stabilised in Rust 1.88 though,
+    // and the README advertises 1.85+, so taking the suggestion would raise the
+    // MSRV. Revisit when the floor moves to 1.88.
+    //
+    // `unknown_lints` is allowed alongside it because the lint does not exist
+    // before 1.98: without it, naming the lint is itself a `-D warnings` error
+    // on older toolchains, so CI and local would fail on opposite versions.
+    #[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
     let samples: Vec<f32> = bytes
         .chunks_exact(4)
         .map(|chunk| {

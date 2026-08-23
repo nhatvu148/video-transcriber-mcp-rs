@@ -3,7 +3,7 @@
   "name": "io.github.nhatvu148/video-transcriber-mcp",
   "title": "Video Transcriber",
   "description": "Transcribe videos from 1000+ platforms or local files offline, and search across every transcript",
-  "version": "0.10.5",
+  "version": "0.10.6",
   "websiteUrl": "https://github.com/nhatvu148/video-transcriber-mcp-rs#readme",
   "repository": {
     "url": "https://github.com/nhatvu148/video-transcriber-mcp-rs",
@@ -14,7 +14,7 @@
       "registryType": "cargo",
       "registryBaseUrl": "https://crates.io",
       "identifier": "video-transcriber-mcp",
-      "version": "0.10.5",
+      "version": "0.10.6",
       "transport": {
         "type": "stdio"
       },

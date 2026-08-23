@@ -5,7 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.10.6] - 2026-08-23
+
+Packaging and discovery metadata. No functional change: the binary is
+identical to 0.10.5, and `git diff v0.10.5..v0.10.6 -- src/` is empty. The
+release exists because the MCP registry reads its ownership token from a
+published crate's README, and crates.io versions are immutable.
 
 ### Added
 
@@ -53,6 +58,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Because crates.io versions are immutable, the token only counts from the
   next publish: the version named in `server.json` must be a release whose
   README already carries it.
+
+### Fixed
+
+- **Clippy on Rust 1.98.** `chunks_exact_to_as_chunks` is a new lint and CI
+  tracks the floating `stable` toolchain, so an unchanged `whisper.rs` started
+  failing `-D warnings` on Linux. Only Linux runs clippy; macOS and Windows run
+  `cargo check`, which is why they stayed green.
+
+  Allowed rather than fixed: the suggested `as_chunks::<4>()` is genuinely
+  better — it drops an infallible `unwrap` — but it stabilised in Rust 1.88 and
+  the README advertises 1.85+, so taking it would raise the MSRV in a patch
+  release. `unknown_lints` is allowed alongside, because naming a lint that
+  does not exist before 1.98 is itself an error on older toolchains.
 
 ## [0.10.5] - 2026-08-12
 

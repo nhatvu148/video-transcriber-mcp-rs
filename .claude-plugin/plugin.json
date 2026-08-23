@@ -1,7 +1,7 @@
 {
   "name": "video-transcriber",
   "displayName": "Video Transcriber",
-  "version": "0.10.5",
+  "version": "0.10.6",
   "description": "Transcribe any video — 1000+ platforms or a local file — with whisper.cpp, then search across everything you've transcribed. Native Rust binary, runs offline.",
   "author": {
     "name": "nhatvu148",

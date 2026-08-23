@@ -12,7 +12,7 @@ repository = "https://github.com/nhatvu148/video-transcriber-mcp-rs"
 # product, not protocol, and now live in a private crate that depends on this
 # one. Breaking for any library consumer, so it gets a minor bump under
 # pre-1.0 semver rather than a patch.
-version = "0.10.5"
+version = "0.10.6"
 
 [[bin]]
 name = "video-transcriber-mcp"
