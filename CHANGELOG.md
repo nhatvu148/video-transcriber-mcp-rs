@@ -5,6 +5,73 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.6] - 2026-08-23
+
+Packaging and discovery metadata. No functional change: the binary is
+identical to 0.10.5, and `git diff v0.10.5..v0.10.6 -- src/` is empty. The
+release exists because the MCP registry reads its ownership token from a
+published crate's README, and crates.io versions are immutable.
+
+### Added
+
+- **Discovery surfaces.** The server was installable four ways and listed in
+  zero indexes — Homebrew, crates.io, and GitHub Releases are good
+  distribution for a native binary, but nobody browses those looking for an
+  MCP server.
+
+  - `server.json` — the official MCP registry. `registryType: "cargo"` means
+    the existing crates.io publish *is* the distribution; no npm wrapper.
+  - `.claude-plugin/` — a Claude Code marketplace and plugin, so
+    `/plugin install video-transcriber@nhatvu148-tools` registers the MCP
+    server and the `/transcribe` skill together. The MCP config is inline in
+    `plugin.json` rather than a root `.mcp.json`, which would otherwise
+    register as a project-scoped server every time this repo is opened.
+  - `skills/transcribe/SKILL.md` — routing between the nine tools, model
+    selection, and the two failure modes worth naming (cookies for gated
+    videos; a wrong `language` rather than a broken transcription).
+  - `glama.json`, `smithery.yaml` — maintainer claim and a stdio launch spec.
+
+  The marketplace is named `nhatvu148-tools`, not after this repo: only one
+  marketplace can be registered per name, so this leaves room for other
+  servers to join the same catalogue later.
+
+- **`scripts/sync-versions.py`, wired into CI.** `server.json` and
+  `plugin.json` each restate the version and nothing in the release flow
+  bumps them, so they would have drifted from `Cargo.toml` on the next
+  release. A stale `server.json` is worse than a missing one: the MCP
+  registry takes it at face value and goes on advertising a release
+  crates.io has already moved past.
+
+  `task version:sync` rewrites them from `Cargo.toml`; `task version:check`
+  fails on drift and now runs in CI and in `release:check`.
+
+- **`mcp-name:` ownership token in the README.** The MCP registry will not
+  accept `server.json` until the crate's *rendered* README on crates.io
+  contains `mcp-name: io.github.nhatvu148/video-transcriber-mcp`.
+
+  It has to be visible text. The registry docs say the token may be hidden in
+  an HTML comment, but that is written for PyPI and NuGet — crates.io strips
+  HTML comments when it renders a README (verified: tokio's README has one in
+  source and none in its rendered output; clap's has four). A commented token
+  would have failed validation with no way to see why.
+
+  Because crates.io versions are immutable, the token only counts from the
+  next publish: the version named in `server.json` must be a release whose
+  README already carries it.
+
+### Fixed
+
+- **Clippy on Rust 1.98.** `chunks_exact_to_as_chunks` is a new lint and CI
+  tracks the floating `stable` toolchain, so an unchanged `whisper.rs` started
+  failing `-D warnings` on Linux. Only Linux runs clippy; macOS and Windows run
+  `cargo check`, which is why they stayed green.
+
+  Allowed rather than fixed: the suggested `as_chunks::<4>()` is genuinely
+  better — it drops an infallible `unwrap` — but it stabilised in Rust 1.88 and
+  the README advertises 1.85+, so taking it would raise the MSRV in a patch
+  release. `unknown_lints` is allowed alongside, because naming a lint that
+  does not exist before 1.98 is itself an error on older toolchains.
+
 ## [0.10.5] - 2026-08-12
 
 ### Fixed

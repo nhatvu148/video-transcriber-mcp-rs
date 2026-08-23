@@ -324,6 +324,17 @@ tasks:
         echo ""
         task deps:check
 
+  # Version manifests
+  version:sync:
+    desc: Sync server.json + plugin.json versions from Cargo.toml
+    cmds:
+      - python3 scripts/sync-versions.py
+
+  version:check:
+    desc: Fail if the discovery manifests have drifted from Cargo.toml
+    cmds:
+      - python3 scripts/sync-versions.py --check
+
   # Release tasks
   release:build:
     desc: Build optimized release binary
@@ -340,6 +351,7 @@ tasks:
       - task: fmt
       - task: lint
       - task: build
+      - task: version:check
       - echo "✅ All checks passed! Ready for release."
 
   release:tag:
@@ -369,7 +381,8 @@ tasks:
       - task: release:check
       - |
         echo ""
-        echo "📝 Please update version in Cargo.toml and CHANGELOG.md if needed"
+        echo "📝 Please update version in Cargo.toml and CHANGELOG.md if needed,"
+        echo "   then run 'task version:sync' to carry it into server.json + plugin.json"
         echo "Press Enter to continue or Ctrl+C to abort..."
         read
       - task: "release:tag"
