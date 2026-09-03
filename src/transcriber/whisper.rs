@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tracing::info;
+use tracing::{info, warn};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 use super::types::{Segment, WhisperModel};
@@ -107,6 +107,36 @@ struct RemoteSegment {
     text: String,
 }
 
+/// How long to wait for the connection itself, as distinct from the work.
+///
+/// Modal cold-starts a GPU container on the first request after idling, and
+/// that shows up here as a slow or dead connect rather than a slow response.
+/// Short enough that a stall is retried while the caller still has budget.
+const REMOTE_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Total attempts, including the first.
+///
+/// Three, not more: each retry re-uploads the whole audio file, so attempts are
+/// not cheap, and a worker that has refused three connections is not having a
+/// cold start any more.
+const REMOTE_ATTEMPTS: u32 = 3;
+
+/// Base backoff, multiplied by the attempt number (0.5s, then 1s).
+///
+/// Deliberately small. This is bridging a container cold start, not backing off
+/// a rate limit, and the caller is holding a paid job open the whole time.
+const REMOTE_BACKOFF: Duration = Duration::from_millis(500);
+
+/// Whether a failed send is worth another attempt.
+///
+/// Connect, timeout and request errors all mean the worker never gave an
+/// answer, so a retry has no side-effect to duplicate. Anything else — a
+/// decode failure, a body error — is about the response we did get, and
+/// repeating the upload would not change it.
+fn is_retryable(e: &reqwest::Error) -> bool {
+    e.is_connect() || e.is_timeout() || e.is_request()
+}
+
 async fn transcribe_remote(
     url: &str,
     audio_path: &Path,
@@ -125,27 +155,58 @@ async fn transcribe_remote(
         .unwrap_or("audio.mp3")
         .to_string();
 
-    let part = reqwest::multipart::Part::bytes(bytes)
-        .file_name(filename)
-        .mime_str("audio/mpeg")
-        .context("Failed to build multipart part")?;
-
-    let form = reqwest::multipart::Form::new()
-        .part("audio", part)
-        .text("model", model.as_str().to_string())
-        .text("language", language.unwrap_or("auto").to_string());
-
     let client = reqwest::Client::builder()
+        // Whole-request budget: a long transcription legitimately takes minutes.
         .timeout(Duration::from_secs(600))
+        // Getting the connection up is not the same as doing the work, and
+        // without this a stalled connect can eat a large slice of the 600s
+        // before anything is retried. On 2026-09-03 a job died after 46s with
+        // `SendRequest: connection error: timed out` and no second attempt.
+        .connect_timeout(REMOTE_CONNECT_TIMEOUT)
         .build()
         .context("Failed to build reqwest client")?;
 
-    let resp = client
-        .post(url)
-        .multipart(form)
-        .send()
-        .await
-        .context("Remote whisper POST failed")?;
+    // The worker scales to zero, so a cold start is normal operation rather
+    // than an exception, and the first connection into one can simply fail.
+    // Retrying transport failures is what makes that survivable.
+    let mut attempt = 1;
+    let resp = loop {
+        // Rebuilt per attempt: `multipart::Form` is consumed by `send`, so it
+        // cannot be reused. The clone is the audio bytes again — real cost, but
+        // only paid on a retry, and cheaper than losing a job the caller has
+        // already been charged for.
+        let part = reqwest::multipart::Part::bytes(bytes.clone())
+            .file_name(filename.clone())
+            .mime_str("audio/mpeg")
+            .context("Failed to build multipart part")?;
+        let form = reqwest::multipart::Form::new()
+            .part("audio", part)
+            .text("model", model.as_str().to_string())
+            .text("language", language.unwrap_or("auto").to_string());
+
+        match client.post(url).multipart(form).send().await {
+            Ok(resp) => break resp,
+            // Retry only what a retry can fix. A connect/timeout/request error
+            // means we never got an answer, so trying again is free of
+            // side-effects. An HTTP error status is a decision the worker
+            // already made — repeating it would just re-upload the audio to be
+            // refused again, which is why that case is handled below instead.
+            Err(e) if attempt < REMOTE_ATTEMPTS && is_retryable(&e) => {
+                let backoff = REMOTE_BACKOFF * attempt;
+                warn!(
+                    "🛰  Remote whisper attempt {attempt}/{REMOTE_ATTEMPTS} failed ({e}); \
+                     retrying in {backoff:?}"
+                );
+                tokio::time::sleep(backoff).await;
+                attempt += 1;
+            }
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    format!("Remote whisper POST failed after {attempt} attempt(s)")
+                });
+            }
+        }
+    };
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -340,4 +401,58 @@ fn optimal_whisper_threads() -> i32 {
     std::thread::available_parallelism()
         .map(|n| n.get() as i32)
         .unwrap_or(4)
+}
+
+#[cfg(test)]
+mod remote_retry_tests {
+    use super::*;
+
+    /// A refused connection is the shape a cold or absent worker presents, and
+    /// it must be retried rather than failing the job on the first try. Port 1
+    /// is refused immediately and deterministically, so this exercises the loop
+    /// without depending on a network or a timer.
+    #[tokio::test]
+    async fn a_refused_connection_is_retried_to_the_limit() {
+        let dir = std::env::temp_dir().join(format!("whisper-retry-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let audio = dir.join("a.mp3");
+        std::fs::write(&audio, b"not really an mp3").unwrap();
+
+        let started = std::time::Instant::now();
+        let err = transcribe_remote("http://127.0.0.1:1/", &audio, WhisperModel::Base, None)
+            .await
+            .expect_err("nothing is listening on port 1");
+        let elapsed = started.elapsed();
+        let msg = format!("{err:#}");
+
+        // Deliberately the literal 3, not REMOTE_ATTEMPTS. Asserting against the
+        // constant makes the test move with it, so dropping retries to 1 would
+        // still "pass" — which is exactly what happened the first time this was
+        // written.
+        assert!(
+            msg.contains("after 3 attempt(s)"),
+            "the error must report all 3 attempts, got: {msg}"
+        );
+        // Two backoffs (500ms + 1000ms) must actually have been waited out. This
+        // is the half that proves retries HAPPENED rather than that a number was
+        // formatted into a string.
+        assert!(
+            elapsed >= std::time::Duration::from_millis(1400),
+            "expected two backoffs to elapse, took only {elapsed:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The classifier is what keeps a retry from duplicating work that already
+    /// happened. A refused connect means the worker never answered, so trying
+    /// again has nothing to duplicate.
+    #[tokio::test]
+    async fn a_refused_connect_classifies_as_retryable() {
+        let e = reqwest::Client::new()
+            .get("http://127.0.0.1:1/")
+            .send()
+            .await
+            .expect_err("nothing is listening on port 1");
+        assert!(is_retryable(&e), "a refused connect must be retryable: {e}");
+    }
 }
