@@ -30,6 +30,9 @@ home = "0.5"
 # `multipart` is for uploading audio to a remote Whisper endpoint
 # (transcriber/whisper.rs), not for serving uploads.
 reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "rustls"] }
+# Already in the tree via reqwest; named directly so the remote-whisper upload
+# can hold the audio as a refcounted `Bytes` and retry without deep-copying it.
+bytes = "1"
 rmcp = { version = "3.1", features = ["server", "transport-io", "transport-streamable-http-server"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

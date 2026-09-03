@@ -145,9 +145,17 @@ async fn transcribe_remote(
 ) -> Result<(String, Vec<Segment>)> {
     info!("🛰  Transcribing via remote Whisper ({}): {:?}", url, model);
 
-    let bytes = tokio::fs::read(audio_path)
-        .await
-        .with_context(|| format!("Failed to read audio file: {}", audio_path.display()))?;
+    // `Bytes`, not `Vec<u8>`: the retry loop below rebuilds the multipart form
+    // on every attempt, and with a Vec that rebuild is a full deep copy of the
+    // audio on the FIRST attempt too — the common case, where nothing is
+    // retried at all. Cloning a `Bytes` is a refcount bump, so the retry
+    // capability costs nothing when it goes unused.
+    let bytes = bytes::Bytes::from(
+        tokio::fs::read(audio_path)
+            .await
+            .with_context(|| format!("Failed to read audio file: {}", audio_path.display()))?,
+    );
+    let len = bytes.len() as u64;
 
     let filename = audio_path
         .file_name()
@@ -172,13 +180,16 @@ async fn transcribe_remote(
     let mut attempt = 1;
     let resp = loop {
         // Rebuilt per attempt: `multipart::Form` is consumed by `send`, so it
-        // cannot be reused. The clone is the audio bytes again — real cost, but
-        // only paid on a retry, and cheaper than losing a job the caller has
-        // already been charged for.
-        let part = reqwest::multipart::Part::bytes(bytes.clone())
-            .file_name(filename.clone())
-            .mime_str("audio/mpeg")
-            .context("Failed to build multipart part")?;
+        // cannot be reused. `bytes` is a refcounted `Bytes`, so this costs a
+        // refcount bump rather than a copy of the audio — including on the
+        // first attempt, which is the one that almost always happens alone.
+        // `stream_with_length` rather than `Part::bytes` because the latter
+        // wants an owned `Cow<'static, [u8]>` and would copy it back out again.
+        let part =
+            reqwest::multipart::Part::stream_with_length(reqwest::Body::from(bytes.clone()), len)
+                .file_name(filename.clone())
+                .mime_str("audio/mpeg")
+                .context("Failed to build multipart part")?;
         let form = reqwest::multipart::Form::new()
             .part("audio", part)
             .text("model", model.as_str().to_string())
@@ -441,6 +452,27 @@ mod remote_retry_tests {
             "expected two backoffs to elapse, took only {elapsed:?}"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The retry loop rebuilds the multipart form on every attempt, so whatever
+    /// holds the audio gets cloned every time — including on the first attempt,
+    /// which is the one that almost always happens alone. With a `Vec<u8>` that
+    /// is a full copy of the audio on the hot path, which is what review caught
+    /// on this change: the retry capability was billing every successful
+    /// transcription for a copy it never used.
+    ///
+    /// Comparing the data pointers is the check that a comment cannot fake — a
+    /// deep copy would land at a different address.
+    #[test]
+    fn cloning_the_audio_buffer_does_not_copy_it() {
+        let audio = bytes::Bytes::from(vec![7u8; 4 * 1024 * 1024]);
+        let for_retry = audio.clone();
+        assert_eq!(
+            audio.as_ptr(),
+            for_retry.as_ptr(),
+            "cloning the upload buffer must share the allocation, not duplicate 4 MB"
+        );
+        assert_eq!(audio.len(), for_retry.len());
     }
 
     /// The classifier is what keeps a retry from duplicating work that already

@@ -2381,6 +2381,7 @@ dependencies = [
  "anyhow",
  "async-process",
  "axum",
+ "bytes",
  "chrono",
  "clap",
  "home",
