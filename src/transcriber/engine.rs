@@ -337,3 +337,28 @@ fn sanitize_filename(name: &str) -> String {
         .take(150)
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filesystem_reserved_characters_become_dashes() {
+        assert_eq!(
+            sanitize_filename(r#"a/b\c:d*e?f"g<h>i|j"#),
+            "a-b-c-d-e-f-g-h-i-j"
+        );
+    }
+
+    #[test]
+    fn ordinary_names_pass_through_unchanged() {
+        assert_eq!(sanitize_filename("My Video Title"), "My Video Title");
+    }
+
+    #[test]
+    fn names_longer_than_150_chars_are_truncated() {
+        let long_name = "x".repeat(200);
+        let sanitized = sanitize_filename(&long_name);
+        assert_eq!(sanitized.chars().count(), 150);
+    }
+}
