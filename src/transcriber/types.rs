@@ -87,3 +87,42 @@ pub struct TranscriptionResult {
     pub word_count: usize,
     pub model_used: WhisperModel,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_str_accepts_every_known_model_case_insensitively() {
+        assert!(matches!("tiny".parse(), Ok(WhisperModel::Tiny)));
+        assert!(matches!("BASE".parse(), Ok(WhisperModel::Base)));
+        assert!(matches!("Small".parse(), Ok(WhisperModel::Small)));
+        assert!(matches!("medium".parse(), Ok(WhisperModel::Medium)));
+        assert!(matches!("LARGE".parse(), Ok(WhisperModel::Large)));
+    }
+
+    #[test]
+    fn from_str_rejects_an_unknown_model() {
+        let result: Result<WhisperModel, _> = "huge".parse();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn as_str_round_trips_through_from_str() {
+        for m in [
+            WhisperModel::Tiny,
+            WhisperModel::Base,
+            WhisperModel::Small,
+            WhisperModel::Medium,
+            WhisperModel::Large,
+        ] {
+            let parsed: WhisperModel = m.as_str().parse().unwrap();
+            assert_eq!(parsed.as_str(), m.as_str());
+        }
+    }
+
+    #[test]
+    fn model_filename_uses_the_ggml_naming_convention() {
+        assert_eq!(WhisperModel::Base.model_filename(), "ggml-base.bin");
+    }
+}
