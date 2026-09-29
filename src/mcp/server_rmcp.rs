@@ -1394,4 +1394,15 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn format_timestamp_renders_as_a_plain_date() {
+        // 2024-01-15T00:00:00Z
+        assert_eq!(format_timestamp(1_705_276_800), "2024-01-15");
+    }
+
+    #[test]
+    fn format_timestamp_handles_the_unix_epoch() {
+        assert_eq!(format_timestamp(0), "1970-01-01");
+    }
 }
