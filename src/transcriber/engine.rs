@@ -383,4 +383,79 @@ mod tests {
         assert_eq!(metadata.video_id, "unknown");
         assert_eq!(metadata.title, "unknown");
     }
+
+    fn sample_metadata() -> VideoMetadata {
+        VideoMetadata {
+            video_id: "abc123".to_string(),
+            title: "My Video".to_string(),
+            channel: "Some Channel".to_string(),
+            duration: 42,
+            upload_date: "20260101".to_string(),
+            platform: "YouTube".to_string(),
+            url: "https://youtube.com/watch?v=abc123".to_string(),
+        }
+    }
+
+    #[test]
+    fn save_outputs_writes_txt_json_and_markdown_with_the_sanitized_filename() {
+        let engine = TranscriberEngine::new();
+        let dir = tempfile::tempdir().unwrap();
+        let metadata = sample_metadata();
+        let segments = vec![Segment {
+            start_ms: 0,
+            end_ms: 1000,
+            text: "hello world".to_string(),
+        }];
+
+        let files = engine
+            .save_outputs(
+                &metadata,
+                "hello world",
+                &segments,
+                &[],
+                dir.path().to_str().unwrap(),
+                WhisperModel::Base,
+            )
+            .unwrap();
+
+        assert!(files.txt.ends_with("abc123-My Video.txt"));
+        assert!(files.json.ends_with("abc123-My Video.json"));
+        assert!(files.md.ends_with("abc123-My Video.md"));
+
+        assert_eq!(std::fs::read_to_string(&files.txt).unwrap(), "hello world");
+
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&files.json).unwrap()).unwrap();
+        assert_eq!(json["transcript"], "hello world");
+        assert_eq!(json["model"], "base");
+        assert_eq!(json["metadata"]["video_id"], "abc123");
+        assert_eq!(json["segments"][0]["text"], "hello world");
+
+        let md = std::fs::read_to_string(&files.md).unwrap();
+        assert!(md.contains("# My Video"));
+        assert!(md.contains("**Channel:** Some Channel"));
+        assert!(md.contains("hello world"));
+    }
+
+    #[test]
+    fn save_outputs_sanitizes_reserved_characters_in_the_generated_filename() {
+        let engine = TranscriberEngine::new();
+        let dir = tempfile::tempdir().unwrap();
+        let mut metadata = sample_metadata();
+        metadata.title = "a/b:c?d".to_string();
+
+        let files = engine
+            .save_outputs(
+                &metadata,
+                "transcript",
+                &[],
+                &[],
+                dir.path().to_str().unwrap(),
+                WhisperModel::Tiny,
+            )
+            .unwrap();
+
+        assert!(files.txt.ends_with("abc123-a-b-c-d.txt"));
+        assert!(std::path::Path::new(&files.txt).exists());
+    }
 }
