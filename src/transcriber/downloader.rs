@@ -190,6 +190,10 @@ impl VideoDownloader {
             "--fragment-retries".to_string(),
             "10".to_string(),
             "--no-playlist".to_string(),
+            // Cap to one entry on its own, not only via the probe's refusal —
+            // the probe and this call each resolve the URL independently.
+            "--playlist-items".to_string(),
+            "1".to_string(),
             "-o".to_string(),
             output_template.to_string_lossy().to_string(),
         ];
