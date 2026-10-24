@@ -167,3 +167,52 @@ pub async fn embed_chunks(segments: &[Segment]) -> Result<Vec<EmbeddedChunk>> {
         })
         .collect())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn seg(start_ms: u64, text: &str) -> Segment {
+        Segment {
+            start_ms,
+            end_ms: start_ms + 1000,
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn no_segments_produce_no_chunks() {
+        assert!(chunk_segments(&[]).is_empty());
+    }
+
+    #[test]
+    fn blank_segments_are_skipped_and_do_not_start_a_chunk() {
+        let chunks = chunk_segments(&[seg(0, "   "), seg(1000, ""), seg(2000, "hello")]);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].content, "hello");
+        // The start time comes from the first non-blank segment, not segment 0.
+        assert_eq!(chunks[0].start_time, Some(2.0));
+    }
+
+    #[test]
+    fn short_segments_are_joined_into_a_single_chunk() {
+        let chunks = chunk_segments(&[seg(0, "hello"), seg(1000, "world")]);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].content, "hello world");
+        assert_eq!(chunks[0].start_time, Some(0.0));
+    }
+
+    #[test]
+    fn a_chunk_flushes_once_it_reaches_the_char_budget() {
+        // Each segment is 1000 chars, so the first two alone (2000 chars)
+        // already hit MAX_CHARS and should flush as their own chunk.
+        let long_a = "a".repeat(1000);
+        let long_b = "b".repeat(1000);
+        let chunks = chunk_segments(&[seg(0, &long_a), seg(5000, &long_b), seg(9000, "tail")]);
+        assert_eq!(chunks.len(), 2);
+        assert!(chunks[0].content.starts_with('a') && chunks[0].content.contains('b'));
+        assert_eq!(chunks[0].start_time, Some(0.0));
+        assert_eq!(chunks[1].content, "tail");
+        assert_eq!(chunks[1].start_time, Some(9.0));
+    }
+}

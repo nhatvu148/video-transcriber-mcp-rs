@@ -415,6 +415,36 @@ fn optimal_whisper_threads() -> i32 {
 }
 
 #[cfg(test)]
+mod model_path_tests {
+    use super::*;
+
+    /// A missing model must fail with a message that tells the caller how to
+    /// fix it, not just that it's missing — this is the only place that error
+    /// text is assembled.
+    #[test]
+    fn a_missing_model_names_the_download_command() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let err = get_model_path(dir.path(), WhisperModel::Base)
+            .expect_err("nothing was downloaded into this empty dir");
+        let msg = format!("{err}");
+
+        assert!(msg.contains("ggml-base.bin"));
+        assert!(msg.contains("download-models.sh base"));
+    }
+
+    #[test]
+    fn an_existing_model_resolves_to_its_path_in_the_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_path = dir.path().join("ggml-base.bin");
+        std::fs::write(&model_path, b"not a real model").unwrap();
+
+        let resolved = get_model_path(dir.path(), WhisperModel::Base).unwrap();
+        assert_eq!(resolved, model_path);
+    }
+}
+
+#[cfg(test)]
 mod remote_retry_tests {
     use super::*;
 

@@ -337,3 +337,50 @@ fn sanitize_filename(name: &str) -> String {
         .take(150)
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filesystem_reserved_characters_become_dashes() {
+        assert_eq!(
+            sanitize_filename(r#"a/b\c:d*e?f"g<h>i|j"#),
+            "a-b-c-d-e-f-g-h-i-j"
+        );
+    }
+
+    #[test]
+    fn ordinary_names_pass_through_unchanged() {
+        assert_eq!(sanitize_filename("My Video Title"), "My Video Title");
+    }
+
+    #[test]
+    fn names_longer_than_150_chars_are_truncated() {
+        let long_name = "x".repeat(200);
+        let sanitized = sanitize_filename(&long_name);
+        assert_eq!(sanitized.chars().count(), 150);
+    }
+
+    #[test]
+    fn local_metadata_uses_the_file_stem_as_title_and_id() {
+        let engine = TranscriberEngine::new();
+        let metadata = engine
+            .get_local_metadata("/home/user/videos/My Trip.mp4")
+            .unwrap();
+        assert_eq!(metadata.video_id, "My Trip");
+        assert_eq!(metadata.title, "My Trip");
+        assert_eq!(metadata.channel, "Local File");
+        assert_eq!(metadata.platform, "Local File");
+        assert_eq!(metadata.duration, 0);
+        assert_eq!(metadata.url, "/home/user/videos/My Trip.mp4");
+    }
+
+    #[test]
+    fn local_metadata_falls_back_to_unknown_when_there_is_no_file_stem() {
+        let engine = TranscriberEngine::new();
+        let metadata = engine.get_local_metadata("/").unwrap();
+        assert_eq!(metadata.video_id, "unknown");
+        assert_eq!(metadata.title, "unknown");
+    }
+}

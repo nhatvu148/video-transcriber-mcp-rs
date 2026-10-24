@@ -1394,4 +1394,16 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn format_timestamp_renders_a_unix_time_as_a_calendar_date() {
+        // 2024-01-15T00:00:00Z, used because transcript listings render a
+        // file's mtime as a plain date rather than a full timestamp.
+        assert_eq!(format_timestamp(1_705_276_800), "2024-01-15");
+    }
+
+    #[test]
+    fn format_timestamp_treats_zero_as_the_unix_epoch() {
+        assert_eq!(format_timestamp(0), "1970-01-01");
+    }
 }

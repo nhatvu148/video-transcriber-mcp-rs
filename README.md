@@ -218,6 +218,17 @@ sudo dnf install ffmpeg  # Fedora
 choco install ffmpeg
 ```
 
+4. **clang/libclang** (`whisper-rs-sys` uses `bindgen` to build whisper.cpp, which needs `libclang` at build time)
+```bash
+# macOS: bundled with Xcode Command Line Tools
+
+# Linux
+sudo apt install libclang-dev  # Debian/Ubuntu
+sudo dnf install clang-devel   # Fedora
+
+# Windows: install LLVM (https://releases.llvm.org) and set LIBCLANG_PATH
+```
+
 ### Build from Source
 
 ```bash

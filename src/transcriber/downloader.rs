@@ -256,7 +256,7 @@ fn detect_platform(url: &str, json: &serde_json::Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_single_video_json, resolve_cookies_args};
+    use super::{detect_platform, parse_single_video_json, resolve_cookies_args};
 
     #[test]
     fn single_video_json_parses() {
@@ -273,6 +273,52 @@ mod tests {
     #[test]
     fn empty_output_is_an_error() {
         assert!(parse_single_video_json("\n").is_err());
+    }
+
+    #[test]
+    fn detect_platform_matches_known_hosts_by_url() {
+        let empty = serde_json::json!({});
+        assert_eq!(
+            detect_platform("https://www.youtube.com/watch?v=abc", &empty),
+            "YouTube"
+        );
+        assert_eq!(detect_platform("https://youtu.be/abc", &empty), "YouTube");
+        assert_eq!(detect_platform("https://vimeo.com/123", &empty), "Vimeo");
+        assert_eq!(
+            detect_platform("https://www.tiktok.com/@a/video/1", &empty),
+            "TikTok"
+        );
+        assert_eq!(
+            detect_platform("https://x.com/user/status/1", &empty),
+            "Twitter/X"
+        );
+        assert_eq!(detect_platform("https://fb.watch/abc", &empty), "Facebook");
+        assert_eq!(
+            detect_platform("https://www.instagram.com/p/abc", &empty),
+            "Instagram"
+        );
+        assert_eq!(
+            detect_platform("https://www.twitch.tv/somechannel", &empty),
+            "Twitch"
+        );
+    }
+
+    #[test]
+    fn detect_platform_is_case_insensitive_on_the_url() {
+        let empty = serde_json::json!({});
+        assert_eq!(
+            detect_platform("HTTPS://WWW.YOUTUBE.COM/watch?v=abc", &empty),
+            "YouTube"
+        );
+    }
+
+    #[test]
+    fn detect_platform_falls_back_to_the_extractor_field() {
+        let json = serde_json::json!({"extractor": "Rumble"});
+        assert_eq!(detect_platform("https://rumble.com/v1", &json), "Rumble");
+
+        let empty = serde_json::json!({});
+        assert_eq!(detect_platform("https://rumble.com/v1", &empty), "Unknown");
     }
 
     #[test]
