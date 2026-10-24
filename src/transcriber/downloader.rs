@@ -49,6 +49,19 @@ fn youtube_client_args() -> [String; 2] {
     ]
 }
 
+/// Parse yt-dlp `--dump-json` output, which is one JSON object PER VIDEO. A
+/// `watch?v=…&list=…` URL resolves to one video under `--no-playlist`, but a
+/// bare playlist/channel URL still prints a line per entry — refuse it here,
+/// before `download_audio` would fetch every entry for the price of one job.
+fn parse_single_video_json(stdout: &str) -> Result<serde_json::Value> {
+    let mut lines = stdout.lines().map(str::trim).filter(|l| !l.is_empty());
+    let first = lines.next().context("yt-dlp returned no metadata")?;
+    if lines.next().is_some() {
+        anyhow::bail!("That URL is a playlist. Paste a link to a single video.");
+    }
+    Ok(serde_json::from_str(first)?)
+}
+
 /// Pure resolution of the cookie flag pair, factored out of `cookies_args` so
 /// the precedence rules can be unit-tested without touching process-global env.
 fn resolve_cookies_args(cookies_file: Option<&str>, browser: Option<&str>) -> Option<[String; 2]> {
@@ -101,7 +114,7 @@ impl VideoDownloader {
     }
 
     pub async fn fetch_metadata(&self, url: &str) -> Result<VideoMetadata> {
-        let mut args: Vec<String> = vec!["--dump-json".to_string()];
+        let mut args: Vec<String> = vec!["--dump-json".to_string(), "--no-playlist".to_string()];
         args.extend(youtube_client_args());
         if let Some(c) = cookies_args() {
             info!("Using {} {}", c[0], c[1]);
@@ -127,7 +140,7 @@ impl VideoDownloader {
         }
 
         let json_str = String::from_utf8(output.stdout)?;
-        let json: serde_json::Value = serde_json::from_str(&json_str)?;
+        let json = parse_single_video_json(&json_str)?;
 
         Ok(VideoMetadata {
             video_id: json["id"].as_str().unwrap_or("unknown").to_string(),
@@ -168,6 +181,7 @@ impl VideoDownloader {
             "10".to_string(),
             "--fragment-retries".to_string(),
             "10".to_string(),
+            "--no-playlist".to_string(),
             "-o".to_string(),
             output_template.to_string_lossy().to_string(),
         ];
@@ -230,7 +244,24 @@ fn detect_platform(url: &str, json: &serde_json::Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_cookies_args;
+    use super::{parse_single_video_json, resolve_cookies_args};
+
+    #[test]
+    fn single_video_json_parses() {
+        let json = parse_single_video_json("{\"id\":\"abc\",\"duration\":60}\n").unwrap();
+        assert_eq!(json["id"], "abc");
+    }
+
+    #[test]
+    fn playlist_json_lines_are_refused() {
+        let err = parse_single_video_json("{\"id\":\"a\"}\n{\"id\":\"b\"}\n").unwrap_err();
+        assert!(err.to_string().contains("playlist"));
+    }
+
+    #[test]
+    fn empty_output_is_an_error() {
+        assert!(parse_single_video_json("\n").is_err());
+    }
 
     #[test]
     fn cookies_file_takes_priority_over_browser() {
