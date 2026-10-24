@@ -114,7 +114,15 @@ impl VideoDownloader {
     }
 
     pub async fn fetch_metadata(&self, url: &str) -> Result<VideoMetadata> {
-        let mut args: Vec<String> = vec!["--dump-json".to_string(), "--no-playlist".to_string()];
+        // `--playlist-end 2` stops a bare playlist/channel URL after the second
+        // entry — enough for `parse_single_video_json` to refuse it, without
+        // enumerating the whole collection first.
+        let mut args: Vec<String> = vec![
+            "--dump-json".to_string(),
+            "--no-playlist".to_string(),
+            "--playlist-end".to_string(),
+            "2".to_string(),
+        ];
         args.extend(youtube_client_args());
         if let Some(c) = cookies_args() {
             info!("Using {} {}", c[0], c[1]);
