@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now `player_client=default`, deferring to the client set yt-dlp maintains
   per release (and picks differently when cookies are set).
   `YT_DLP_PLAYER_CLIENT` still overrides it.
+- **Durations reported as a float were read as 0.** `VideoMetadata.duration`
+  used `as_u64`, which returns nothing for `1057.3`, as many extractors report
+  it. Durations are now read as a number of seconds, rounded up.
+- **Live streams are refused up front.** A live or upcoming broadcast
+  (`is_live`, or `live_status` of `is_live` / `is_upcoming`) now fails the
+  metadata probe with "Live streams aren't supported" instead of recording
+  until the broadcast ends. A finished broadcast is an ordinary video.
 
 ## [0.10.6] - 2026-08-23
 

@@ -70,6 +70,31 @@ fn parse_single_video_json(stdout: &str) -> Result<serde_json::Value> {
     Ok(serde_json::from_str(first)?)
 }
 
+/// Refuse a live or scheduled broadcast. yt-dlp would record a live stream
+/// until it ends (unbounded time and size for one request), and an upcoming
+/// one has nothing to download yet. A finished broadcast (`was_live`) is an
+/// ordinary video.
+fn refuse_live(json: &serde_json::Value) -> Result<()> {
+    let live = json["is_live"].as_bool() == Some(true)
+        || matches!(
+            json["live_status"].as_str(),
+            Some("is_live" | "is_upcoming")
+        );
+    if live {
+        anyhow::bail!("Live streams aren't supported. Try again once the broadcast has ended.");
+    }
+    Ok(())
+}
+
+/// Length in whole seconds, rounded up; 0 when yt-dlp doesn't report one.
+/// Many extractors report a float (`1057.3`), which `as_u64` reads as missing.
+fn duration_secs(json: &serde_json::Value) -> u64 {
+    json["duration"]
+        .as_f64()
+        .filter(|d| d.is_finite() && *d > 0.0)
+        .map_or(0, |d| d.ceil() as u64)
+}
+
 /// Pure resolution of the cookie flag pair, factored out of `cookies_args` so
 /// the precedence rules can be unit-tested without touching process-global env.
 fn resolve_cookies_args(cookies_file: Option<&str>, browser: Option<&str>) -> Option<[String; 2]> {
@@ -157,6 +182,7 @@ impl VideoDownloader {
 
         let json_str = String::from_utf8(output.stdout)?;
         let json = parse_single_video_json(&json_str)?;
+        refuse_live(&json)?;
 
         Ok(VideoMetadata {
             video_id: json["id"].as_str().unwrap_or("unknown").to_string(),
@@ -166,7 +192,7 @@ impl VideoDownloader {
                 .or_else(|| json["uploader"].as_str())
                 .unwrap_or("Unknown")
                 .to_string(),
-            duration: json["duration"].as_u64().unwrap_or(0),
+            duration: duration_secs(&json),
             upload_date: json["upload_date"].as_str().unwrap_or("").to_string(),
             platform: detect_platform(url, &json),
             url: url.to_string(),
@@ -265,8 +291,44 @@ fn detect_platform(url: &str, json: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_platform, parse_single_video_json, resolve_cookies_args, resolve_youtube_client_args,
+        detect_platform, duration_secs, parse_single_video_json, refuse_live, resolve_cookies_args,
+        resolve_youtube_client_args,
     };
+    use serde_json::json;
+
+    #[test]
+    fn live_and_upcoming_broadcasts_are_refused() {
+        for j in [
+            json!({"is_live": true}),
+            json!({"live_status": "is_live"}),
+            json!({"live_status": "is_upcoming"}),
+        ] {
+            let err = refuse_live(&j).unwrap_err().to_string();
+            assert!(err.contains("Live streams aren't supported"), "{j}: {err}");
+        }
+    }
+
+    #[test]
+    fn finished_videos_and_past_broadcasts_are_not_live() {
+        for j in [
+            json!({}),
+            json!({"is_live": false, "live_status": "not_live"}),
+            json!({"is_live": false, "live_status": "was_live"}),
+            json!({"live_status": "post_live"}),
+        ] {
+            assert!(refuse_live(&j).is_ok(), "{j}");
+        }
+    }
+
+    #[test]
+    fn durations_are_read_whether_integer_or_float() {
+        assert_eq!(duration_secs(&json!({"duration": 1057})), 1057);
+        // Rounded up: a 1057.3 s video is billed as 1058 s, never as 0.
+        assert_eq!(duration_secs(&json!({"duration": 1057.3})), 1058);
+        assert_eq!(duration_secs(&json!({})), 0);
+        assert_eq!(duration_secs(&json!({"duration": null})), 0);
+        assert_eq!(duration_secs(&json!({"duration": -5.0})), 0);
+    }
 
     #[test]
     fn single_video_json_parses() {
