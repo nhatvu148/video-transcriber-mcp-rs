@@ -7,12 +7,11 @@ keywords = ["whisper", "transcription", "mcp", "video", "audio"]
 license = "MIT OR Apache-2.0"
 name = "video-transcriber-mcp"
 repository = "https://github.com/nhatvu148/video-transcriber-mcp-rs"
-# 0.10 rather than 0.9.1: the library's public surface shrank. `api`, `auth`,
-# `credits`, `llm` and `x402_mcp` were public modules and are gone — they were
-# product, not protocol, and now live in a private crate that depends on this
-# one. Breaking for any library consumer, so it gets a minor bump under
-# pre-1.0 semver rather than a patch.
-version = "0.10.6"
+# 0.11 rather than 0.10.7: live broadcasts and bare playlist URLs now fail
+# where they used to download, a change callers see in what they get back, so
+# it gets a minor bump under pre-1.0 semver rather than a patch. The library
+# API is unchanged; CHANGELOG.md has the details.
+version = "0.11.0"
 
 [[bin]]
 name = "video-transcriber-mcp"
