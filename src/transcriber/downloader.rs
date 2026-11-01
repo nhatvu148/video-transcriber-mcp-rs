@@ -70,6 +70,12 @@ fn parse_single_video_json(stdout: &str) -> Result<serde_json::Value> {
     Ok(serde_json::from_str(first)?)
 }
 
+const LIVE_REFUSAL: &str = "Live streams aren't supported. Try again once the broadcast has ended.";
+
+/// yt-dlp `--match-filter` with the same rule as [`refuse_live`]. `!=?` lets
+/// media that reports no `live_status` at all (a direct file link) through.
+const NOT_LIVE_FILTER: &str = "!is_live & live_status!=?is_live & live_status!=?is_upcoming";
+
 /// Refuse a live or scheduled broadcast. yt-dlp would record a live stream
 /// until it ends (unbounded time and size for one request), and an upcoming
 /// one has nothing to download yet. A finished broadcast (`was_live`) is an
@@ -81,7 +87,7 @@ fn refuse_live(json: &serde_json::Value) -> Result<()> {
             Some("is_live" | "is_upcoming")
         );
     if live {
-        anyhow::bail!("Live streams aren't supported. Try again once the broadcast has ended.");
+        anyhow::bail!(LIVE_REFUSAL);
     }
     Ok(())
 }
@@ -228,6 +234,10 @@ impl VideoDownloader {
             // the probe and this call each resolve the URL independently.
             "--playlist-items".to_string(),
             "1".to_string(),
+            // `refuse_live` checked the probe, but this call resolves the URL
+            // again, and a scheduled stream may have gone live in between.
+            "--match-filter".to_string(),
+            NOT_LIVE_FILTER.to_string(),
             "-o".to_string(),
             output_template.to_string_lossy().to_string(),
         ];
@@ -248,6 +258,11 @@ impl VideoDownloader {
                 "yt-dlp failed to download video: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
+        }
+
+        // A filtered-out video is skipped with exit 0 and no file.
+        if String::from_utf8_lossy(&output.stdout).contains("does not pass filter") {
+            anyhow::bail!(LIVE_REFUSAL);
         }
 
         // Find the downloaded file
