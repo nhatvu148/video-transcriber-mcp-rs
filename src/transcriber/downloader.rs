@@ -30,19 +30,21 @@ fn cookies_args() -> Option<[String; 2]> {
     )
 }
 
-/// yt-dlp extractor args that dodge YouTube's nsig download throttling — the
-/// "N bytes read, M more expected. Giving up after 10 retries" failures on the
-/// default `web` client. The `android`/`web_safari` clients serve un-throttled
-/// formats; yt-dlp falls through the list if one is unavailable. Ignored on
-/// non-YouTube URLs, so it's safe to always pass.
+/// yt-dlp's YouTube player clients. `default` defers to yt-dlp's own client
+/// set, which it retunes every release as YouTube changes which clients serve
+/// audio, and which differs when cookies are passed. A hard-coded list goes
+/// stale: `android,web_safari,web` worked around nsig throttling once, but by
+/// 2026-11 `web_safari`/`web` returned only images, and yt-dlp skips `android`
+/// whenever cookies are set, so every YouTube job failed with "Requested format
+/// is not available". Ignored on non-YouTube URLs, so it's safe to always pass.
 ///
-/// Override via `YT_DLP_PLAYER_CLIENT` if YouTube shifts which clients work.
+/// Override via `YT_DLP_PLAYER_CLIENT` if a specific client set is needed.
 fn youtube_client_args() -> [String; 2] {
     let clients = std::env::var("YT_DLP_PLAYER_CLIENT")
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "android,web_safari,web".to_string());
+        .unwrap_or_else(|| "default".to_string());
     [
         "--extractor-args".to_string(),
         format!("youtube:player_client={clients}"),
