@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **YouTube downloads failed with "Requested format is not available".** The
+  downloader forced `player_client=android,web_safari,web`. YouTube now serves
+  only images to `web_safari`/`web`, and yt-dlp skips `android` whenever
+  cookies are passed, so no client in the list returned audio. The default is
+  now `player_client=default`, deferring to the client set yt-dlp maintains
+  per release (and picks differently when cookies are set).
+  `YT_DLP_PLAYER_CLIENT` still overrides it.
+
 ## [0.10.6] - 2026-08-23
 
 Packaging and discovery metadata. No functional change: the binary is

@@ -30,19 +30,27 @@ fn cookies_args() -> Option<[String; 2]> {
     )
 }
 
-/// yt-dlp extractor args that dodge YouTube's nsig download throttling — the
-/// "N bytes read, M more expected. Giving up after 10 retries" failures on the
-/// default `web` client. The `android`/`web_safari` clients serve un-throttled
-/// formats; yt-dlp falls through the list if one is unavailable. Ignored on
-/// non-YouTube URLs, so it's safe to always pass.
+/// yt-dlp's YouTube player clients. `default` defers to yt-dlp's own client
+/// set, which it retunes every release as YouTube changes which clients serve
+/// audio, and which differs when cookies are passed. A hard-coded list goes
+/// stale: `android,web_safari,web` worked around nsig throttling once, but by
+/// 2026-11 `web_safari`/`web` returned only images, and yt-dlp skips `android`
+/// whenever cookies are set, so every YouTube job failed with "Requested format
+/// is not available". Ignored on non-YouTube URLs, so it's safe to always pass.
 ///
-/// Override via `YT_DLP_PLAYER_CLIENT` if YouTube shifts which clients work.
+/// Override via `YT_DLP_PLAYER_CLIENT` if a specific client set is needed.
 fn youtube_client_args() -> [String; 2] {
-    let clients = std::env::var("YT_DLP_PLAYER_CLIENT")
-        .ok()
-        .map(|s| s.trim().to_string())
+    resolve_youtube_client_args(std::env::var("YT_DLP_PLAYER_CLIENT").ok().as_deref())
+}
+
+/// Pure resolution of the player-client flag pair, factored out of
+/// `youtube_client_args` so the default can be unit-tested without touching
+/// process-global env.
+fn resolve_youtube_client_args(clients: Option<&str>) -> [String; 2] {
+    let clients = clients
+        .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "android,web_safari,web".to_string());
+        .unwrap_or("default");
     [
         "--extractor-args".to_string(),
         format!("youtube:player_client={clients}"),
@@ -256,7 +264,9 @@ fn detect_platform(url: &str, json: &serde_json::Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{detect_platform, parse_single_video_json, resolve_cookies_args};
+    use super::{
+        detect_platform, parse_single_video_json, resolve_cookies_args, resolve_youtube_client_args,
+    };
 
     #[test]
     fn single_video_json_parses() {
@@ -319,6 +329,19 @@ mod tests {
 
         let empty = serde_json::json!({});
         assert_eq!(detect_platform("https://rumble.com/v1", &empty), "Unknown");
+    }
+
+    #[test]
+    fn player_client_defers_to_yt_dlp_unless_overridden() {
+        // A hard-coded client list went stale and broke every YouTube job
+        // (2026-11): the default must stay yt-dlp's own `default` set.
+        let default = ["--extractor-args", "youtube:player_client=default"];
+        assert_eq!(resolve_youtube_client_args(None), default);
+        assert_eq!(resolve_youtube_client_args(Some("  ")), default);
+        assert_eq!(
+            resolve_youtube_client_args(Some(" tv,web ")),
+            ["--extractor-args", "youtube:player_client=tv,web"]
+        );
     }
 
     #[test]
