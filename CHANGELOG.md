@@ -5,7 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.11.0] - 2026-11-01
+
+A minor release because two kinds of URL now fail where they used to
+download: live broadcasts and bare playlists. Everything else is a fix: the
+library API is unchanged.
+
+### Changed
+
+- **Live streams are refused.** A live or upcoming broadcast (`is_live`, or
+  `live_status` of `is_live` / `is_upcoming`) fails with "Live streams aren't
+  supported. Try again once the broadcast has ended." instead of being
+  recorded until the broadcast ends, which meant unbounded time and size for
+  one request. Both yt-dlp calls check it: the metadata probe, and the download
+  through `--match-filter`, since a scheduled stream can go live between the
+  two. A finished broadcast is an ordinary video.
+- **One URL is one video.** Both yt-dlp calls pass `--no-playlist`, so a
+  `watch?v=…&list=…` link transcribes just that video. A bare playlist or
+  channel URL fails with "That URL is a playlist. Paste a link to a single
+  video." Before, the probe died on `trailing characters at line 2 column 1`
+  (yt-dlp prints one JSON object per entry), and the download would have
+  fetched every entry.
 
 ### Fixed
 
@@ -19,10 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Durations reported as a float were read as 0.** `VideoMetadata.duration`
   used `as_u64`, which returns nothing for `1057.3`, as many extractors report
   it. Durations are now read as a number of seconds, rounded up.
-- **Live streams are refused up front.** A live or upcoming broadcast
-  (`is_live`, or `live_status` of `is_live` / `is_upcoming`) now fails the
-  metadata probe with "Live streams aren't supported" instead of recording
-  until the broadcast ends. A finished broadcast is an ordinary video.
+- **A cold remote-Whisper worker could fail a job on its first connection.**
+  A worker that scales to zero can drop the first connect while it starts.
+  The upload now retries transport failures (connect, timeout, request
+  errors) up to 3 attempts, backing off 0.5s then 1s, and bounds the connect
+  separately at 15s so a stalled handshake no longer eats the request's
+  whole budget. An HTTP error status is the worker's answer and is not
+  retried.
 
 ## [0.10.6] - 2026-08-23
 
