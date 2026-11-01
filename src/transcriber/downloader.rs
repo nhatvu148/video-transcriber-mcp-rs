@@ -40,11 +40,17 @@ fn cookies_args() -> Option<[String; 2]> {
 ///
 /// Override via `YT_DLP_PLAYER_CLIENT` if a specific client set is needed.
 fn youtube_client_args() -> [String; 2] {
-    let clients = std::env::var("YT_DLP_PLAYER_CLIENT")
-        .ok()
-        .map(|s| s.trim().to_string())
+    resolve_youtube_client_args(std::env::var("YT_DLP_PLAYER_CLIENT").ok().as_deref())
+}
+
+/// Pure resolution of the player-client flag pair, factored out of
+/// `youtube_client_args` so the default can be unit-tested without touching
+/// process-global env.
+fn resolve_youtube_client_args(clients: Option<&str>) -> [String; 2] {
+    let clients = clients
+        .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "default".to_string());
+        .unwrap_or("default");
     [
         "--extractor-args".to_string(),
         format!("youtube:player_client={clients}"),
@@ -258,7 +264,9 @@ fn detect_platform(url: &str, json: &serde_json::Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{detect_platform, parse_single_video_json, resolve_cookies_args};
+    use super::{
+        detect_platform, parse_single_video_json, resolve_cookies_args, resolve_youtube_client_args,
+    };
 
     #[test]
     fn single_video_json_parses() {
@@ -321,6 +329,19 @@ mod tests {
 
         let empty = serde_json::json!({});
         assert_eq!(detect_platform("https://rumble.com/v1", &empty), "Unknown");
+    }
+
+    #[test]
+    fn player_client_defers_to_yt_dlp_unless_overridden() {
+        // A hard-coded client list went stale and broke every YouTube job
+        // (2026-11): the default must stay yt-dlp's own `default` set.
+        let default = ["--extractor-args", "youtube:player_client=default"];
+        assert_eq!(resolve_youtube_client_args(None), default);
+        assert_eq!(resolve_youtube_client_args(Some("  ")), default);
+        assert_eq!(
+            resolve_youtube_client_args(Some(" tv,web ")),
+            ["--extractor-args", "youtube:player_client=tv,web"]
+        );
     }
 
     #[test]
